@@ -78,6 +78,22 @@ class RenameRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
 
+class AIEdit(BaseModel):
+    description: str | None = None
+    tags: list[str] | None = None
+    category: str | None = None
+    location: str | None = None
+    photographer: str | None = None
+
+class BatchAIEdit(BaseModel):
+    photo_ids: list[int]
+    description: str | None = None
+    add_tags: list[str] | None = None
+    remove_tags: list[str] | None = None
+    category: str | None = None
+    photographer: str | None = None
+    location: str | None = None
+
 class SettingsUpdate(BaseModel):
     engine: str | None = None
     claude_api_key: str | None = None
@@ -86,6 +102,8 @@ class SettingsUpdate(BaseModel):
     ollama_model: str | None = None
     gemini_api_key: str | None = None
     gemini_model: str | None = None
+    zhipu_api_key: str | None = None
+    zhipu_model: str | None = None
     rename_prefix: str | None = None
     rename_template: str | None = None
     analysis_concurrency: str | None = None
@@ -179,6 +197,52 @@ async def get_photo(photo_id: int):
     return photo
 
 
+@app.patch("/api/photos/{photo_id}/ai")
+async def edit_photo_ai(photo_id: int, req: AIEdit):
+    """Manually edit a single photo's AI fields (description / tags / etc.)."""
+    ok = await db.update_ai_fields(
+        photo_id,
+        description=req.description,
+        tags=req.tags,
+        category=req.category,
+        location=req.location,
+        photographer=req.photographer,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="照片尚未分析或不存在，无法编辑")
+    return await db.get_photo(photo_id)
+
+
+@app.post("/api/photos/ai/batch")
+async def batch_edit_photo_ai(req: BatchAIEdit):
+    """Batch-edit AI fields for selected photos: set description / category /
+    photographer, and add or remove tags (merged per photo)."""
+    updated = 0
+    for pid in req.photo_ids:
+        photo = await db.get_photo(pid)
+        if not photo or not photo.get("ai"):
+            continue
+        tags = list(photo["ai"].get("tags") or [])
+        if req.add_tags:
+            for t in req.add_tags:
+                if t and t not in tags:
+                    tags.append(t)
+        if req.remove_tags:
+            tags = [t for t in tags if t not in req.remove_tags]
+        new_tags = tags if (req.add_tags or req.remove_tags) else None
+        ok = await db.update_ai_fields(
+            pid,
+            description=req.description if req.description else None,
+            tags=new_tags,
+            category=req.category if req.category else None,
+            photographer=req.photographer if req.photographer else None,
+            location=req.location if req.location else None,
+        )
+        if ok:
+            updated += 1
+    return {"updated": updated, "total": len(req.photo_ids)}
+
+
 # ---------------------------------------------------------------------------
 # Thumbnails
 # ---------------------------------------------------------------------------
@@ -235,6 +299,18 @@ async def analyze_photos(req: AnalyzeRequest, bg: BackgroundTasks):
     )
 
     return {"message": "AI 分析已启动", "status": "analyzing"}
+
+
+# Registered before the /{photo_id} route so "pause"/"resume" don't get parsed
+# as a photo id.
+@app.post("/api/analyze/pause")
+async def analyze_pause():
+    return analyzer.pause_analysis()
+
+
+@app.post("/api/analyze/resume")
+async def analyze_resume():
+    return analyzer.resume_analysis()
 
 
 @app.post("/api/analyze/{photo_id}")
@@ -322,8 +398,13 @@ async def semantic_search(req: SearchRequest):
     settings = await db.get_settings()
     engine_name = settings.get("engine", "claude")
 
-    # Get all analyzed photos
-    photos, _ = await db.get_photos(limit=10000, status="done")
+    # Scope to the currently active folder so results match the gallery view.
+    current_folder = settings.get("last_folder", "")
+
+    # Get analyzed photos within the active folder
+    photos, _ = await db.get_photos(
+        limit=10000, status="done", folder_path=current_folder or None
+    )
     if not photos:
         return {"photos": [], "query": req.query}
 
@@ -346,6 +427,9 @@ async def semantic_search(req: SearchRequest):
     elif engine_name == "gemini":
         engine_kwargs["api_key"] = settings.get("gemini_api_key", "")
         engine_kwargs["model"] = settings.get("gemini_model", "gemini-2.5-flash")
+    elif engine_name == "zhipu":
+        engine_kwargs["api_key"] = settings.get("zhipu_api_key", "")
+        engine_kwargs["model"] = settings.get("zhipu_model", "glm-4v-flash")
 
     engine = get_engine(engine_name, **engine_kwargs)
 
@@ -356,16 +440,19 @@ async def semantic_search(req: SearchRequest):
     import re
     try:
         if hasattr(engine, 'analyze'):
-            # Use text-only call for Claude/Ollama/Gemini
+            # Use text-only call for Claude/Ollama/Gemini/Zhipu
             from engines.claude_engine import ClaudeEngine
             from engines.ollama_engine import OllamaEngine
             from engines.gemini_engine import GeminiEngine
+            from engines.zhipu_engine import ZhipuEngine
             if isinstance(engine, ClaudeEngine):
                 text = await _claude_text_call(engine, prompt)
             elif isinstance(engine, OllamaEngine):
                 text = await _ollama_text_call(engine, prompt)
             elif isinstance(engine, GeminiEngine):
                 text = await _gemini_text_call(engine, prompt)
+            elif isinstance(engine, ZhipuEngine):
+                text = await _zhipu_text_call(engine, prompt)
             else:
                 return {"photos": [], "query": req.query, "error": "CLIP 不支持语义搜索"}
 
@@ -413,6 +500,24 @@ async def _ollama_text_call(engine, prompt):
     return data.get("message", {}).get("content", "")
 
 
+async def _zhipu_text_call(engine, prompt):
+    import httpx
+    payload = {
+        "model": engine.model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1000,
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(engine.API_URL, json=payload, headers=engine._headers())
+    data = resp.json()
+    text = ""
+    for choice in data.get("choices", []):
+        content = choice.get("message", {}).get("content", "")
+        if isinstance(content, str):
+            text += content
+    return text
+
+
 async def _gemini_text_call(engine, prompt):
     import httpx
     payload = {
@@ -449,26 +554,43 @@ async def get_tags():
 # Settings
 # ---------------------------------------------------------------------------
 
+# Settings fields holding secrets — never returned in plaintext.
+_SECRET_SETTING_KEYS = ("claude_api_key", "gemini_api_key", "zhipu_api_key")
+_MASK_CHAR = "…"
+
+
+def _mask_secret(key: str) -> str:
+    """Return a non-reversible masked hint for a secret value."""
+    if not key:
+        return ""
+    return key[:6] + _MASK_CHAR if len(key) > 6 else "***"
+
+
 @app.get("/api/settings")
 async def get_settings():
     settings = await db.get_settings()
-    # Mask API key for security
-    masked = dict(settings)
-    if masked.get("claude_api_key"):
-        key = masked["claude_api_key"]
-        masked["claude_api_key_masked"] = key[:10] + "…" if len(key) > 10 else "***"
-    if masked.get("gemini_api_key"):
-        key = masked["gemini_api_key"]
-        masked["gemini_api_key_masked"] = key[:10] + "…" if len(key) > 10 else "***"
-    return masked
+    safe = dict(settings)
+    # Strip plaintext secrets; expose only a masked hint + a "is set" flag.
+    for k in _SECRET_SETTING_KEYS:
+        value = safe.pop(k, "")
+        safe[f"{k}_masked"] = _mask_secret(value)
+        safe[f"{k}_set"] = bool(value)
+    return safe
 
 
 @app.put("/api/settings")
 async def update_settings(req: SettingsUpdate):
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
+    # Never overwrite a stored secret with an empty value or with the masked
+    # hint that the frontend echoes back during its periodic auto-sync.
+    for k in _SECRET_SETTING_KEYS:
+        v = updates.get(k)
+        if v is not None and (v == "" or _MASK_CHAR in v):
+            updates.pop(k)
     if updates:
         await db.update_settings(updates)
-    return await db.get_settings()
+    # Return the same sanitized shape as GET so no plaintext secret leaks back.
+    return await get_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +604,7 @@ async def export_csv():
     output = io.StringIO()
     output.write('\ufeff')  # BOM for Excel
     writer = csv.writer(output)
-    writer.writerow(["ID", "原文件名", "相对路径", "AI类别", "标签", "描述",
+    writer.writerow(["ID", "原文件名", "相对路径", "摄影师", "AI类别", "标签", "描述", "地点",
                      "拍摄日期", "相机", "镜头", "GPS", "建议新名"])
 
     settings = await db.get_settings()
@@ -501,7 +623,9 @@ async def export_csv():
             gps = f"{exif['gps_lat']:.4f}, {exif.get('gps_lon', 0):.4f}"
         writer.writerow([
             p["id"], p["file_name"], p.get("relative_path", ""),
+            ai.get("photographer", ""),
             ai.get("category", ""), tags, ai.get("description", ""),
+            ai.get("location", ""),
             exif.get("date_time_original", ""), exif.get("camera_model", ""),
             exif.get("lens_model", ""), gps, name_map.get(p["id"], ""),
         ])
@@ -533,6 +657,9 @@ async def test_engine():
     elif engine_name == "gemini":
         engine_kwargs["api_key"] = settings.get("gemini_api_key", "")
         engine_kwargs["model"] = settings.get("gemini_model", "gemini-2.5-flash")
+    elif engine_name == "zhipu":
+        engine_kwargs["api_key"] = settings.get("zhipu_api_key", "")
+        engine_kwargs["model"] = settings.get("zhipu_model", "glm-4v-flash")
 
     try:
         engine = get_engine(engine_name, **engine_kwargs)

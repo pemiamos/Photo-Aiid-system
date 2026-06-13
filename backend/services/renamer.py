@@ -47,7 +47,7 @@ def sanitize_filename(s: str) -> str:
 def format_date(date_str: str | None) -> str:
     """Convert EXIF date (YYYY:MM:DD HH:MM:SS) to compact format (YYYYMMDD)."""
     if not date_str:
-        return "未知"
+        return ""
     # Try common EXIF date format
     try:
         parts = date_str.replace("-", ":").split(" ")[0].split(":")
@@ -55,7 +55,44 @@ def format_date(date_str: str | None) -> str:
             return f"{parts[0]}{parts[1]}{parts[2]}"
     except Exception:
         pass
-    return "未知"
+    return ""
+
+
+_TOKEN_RE = re.compile(r"\[[^\[\]]+\]")
+
+
+def render_template(template: str, fields: dict[str, str]) -> str:
+    """Render a token template, dropping empty tokens AND the separator that
+    would dangle next to them (so an empty field never leaves "__" or a leading
+    or trailing separator). Token values keep their own punctuation intact.
+    """
+    pieces: list[tuple[str, str]] = []  # ("lit", text) | ("tok", "[name]")
+    pos = 0
+    for m in _TOKEN_RE.finditer(template):
+        if m.start() > pos:
+            pieces.append(("lit", template[pos:m.start()]))
+        pieces.append(("tok", m.group(0)))
+        pos = m.end()
+    if pos < len(template):
+        pieces.append(("lit", template[pos:]))
+
+    out: list[str] = []
+    have_value = False
+    pending_sep = ""
+    for kind, text in pieces:
+        if kind == "lit":
+            pending_sep += text
+        else:
+            val = sanitize_filename(fields.get(text, "")) if fields.get(text) else ""
+            if val:
+                if have_value and pending_sep:
+                    out.append(pending_sep)
+                out.append(val)
+                have_value = True
+            # whether used or not, the separator leading into this token is consumed
+            pending_sep = ""
+    base = "".join(out).strip("_-. ")
+    return base or "未命名"
 
 
 async def compute_renames(
@@ -91,29 +128,33 @@ async def compute_renames(
         if not ai:
             continue
 
-        # Get EXIF date
-        exif_date = ""
-        exif = photo.get("exif")
-        if exif and exif.get("date_time_original"):
-            exif_date = format_date(exif["date_time_original"])
-        if not exif_date or exif_date == "未知":
-            # Fall back to file modification time
+        # Get EXIF date (fall back to file mtime)
+        exif = photo.get("exif") or {}
+        exif_date = format_date(exif.get("date_time_original"))
+        if not exif_date:
             try:
-                mtime = os.path.getmtime(photo["file_path"])
                 from datetime import datetime
-                dt = datetime.fromtimestamp(mtime)
-                exif_date = dt.strftime("%Y%m%d")
+                exif_date = datetime.fromtimestamp(
+                    os.path.getmtime(photo["file_path"])
+                ).strftime("%Y%m%d")
             except Exception:
-                exif_date = "未知"
+                exif_date = ""
 
-        # Apply template
-        base = sanitize_filename(
-            template
-            .replace("[前缀]", prefix)
-            .replace("[AI标签]", ai.get("category", "未分类"))
-            .replace("[日期]", exif_date)
-            .replace("[序号]", str(seq).zfill(3))
-        )
+        tags = ai.get("tags") or []
+        # Token → value map (empty values are dropped cleanly by render_template)
+        fields = {
+            "[前缀]": prefix,
+            "[摄影师]": ai.get("photographer", ""),
+            "[类别]": ai.get("category", ""),
+            "[AI标签]": ai.get("category", ""),     # backward-compat alias
+            "[标签]": tags[0] if tags else "",
+            "[标签2]": "".join(tags[:2]),
+            "[地点]": ai.get("location", ""),
+            "[日期]": exif_date,
+            "[相机]": exif.get("camera_model", "") or "",
+            "[序号]": str(seq).zfill(3),
+        }
+        base = render_template(template, fields)
 
         old_ext = Path(photo["file_name"]).suffix or ".jpg"
         new_name = base + old_ext

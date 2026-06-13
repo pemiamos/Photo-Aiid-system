@@ -63,6 +63,35 @@
   font-size: 11px;
   color: var(--muted);
   margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-time {
+  color: var(--faint);
+}
+
+.pause-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 2px 12px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: border-color .15s var(--ease), color .15s var(--ease);
+}
+
+.pause-btn:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.progress-fill.paused {
+  background: var(--muted);
 }
 
 .progress-track {
@@ -112,6 +141,83 @@
   overflow: hidden;
   position: relative;
   animation: fadeIn .3s var(--ease) both;
+  cursor: pointer;
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+}
+
+.photo-card:hover {
+  border-color: var(--amber);
+}
+
+.photo-card.selected {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 2px var(--amber) inset;
+}
+
+/* selection checkmark badge */
+.card-check {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: transparent;
+  background: rgba(0, 0, 0, .5);
+  border: 1.5px solid rgba(255, 255, 255, .55);
+  border-radius: 50%;
+  backdrop-filter: blur(4px);
+  transition: all .15s var(--ease);
+  z-index: 2;
+}
+
+.photo-card:hover .card-check {
+  border-color: var(--amber);
+}
+
+.card-check.on {
+  color: #101114;
+  background: var(--amber);
+  border-color: var(--amber);
+}
+
+/* selection toolbar */
+.select-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.select-info b {
+  color: var(--amber);
+}
+
+.select-btn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color .15s var(--ease), color .15s var(--ease);
+}
+
+.select-btn:hover:not(:disabled) {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.select-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
 }
 
 .card-edge {
@@ -203,10 +309,92 @@
   border: 1px solid var(--line);
 }
 
+.card-location {
+  font-size: 11px;
+  color: var(--amber);
+  margin: 4px 0 6px;
+}
+
+/* ── inline / batch editor ── */
+.card-edit-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  margin-left: 6px;
+  opacity: .55;
+}
+.card-edit-btn:hover { opacity: 1; }
+
+.photo-card.editing { cursor: default; }
+
+.card-editor label,
+.batch-editor .batch-title {
+  display: block;
+  font-size: 10px;
+  color: var(--muted);
+  margin: 6px 0 3px;
+}
+
+.card-editor textarea,
+.card-editor input,
+.batch-editor input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--panel-2, #1a1b1e);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 7px;
+  font-family: var(--sans);
+  margin-bottom: 4px;
+}
+
+.card-editor-actions,
+.batch-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.ed-save, .ed-cancel {
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--text);
+}
+.ed-save { border-color: var(--amber); color: var(--amber); }
+.ed-save:disabled { opacity: .5; cursor: not-allowed; }
+
+.batch-editor {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.batch-editor .batch-title {
+  color: var(--amber);
+  font-size: 12px;
+  margin-top: 0;
+}
+
 .card-exif {
   font-family: var(--mono);
   font-size: 10px;
   color: var(--faint);
   margin-top: 7px;
   line-height: 1.6;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+.card-exif .exif-row {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

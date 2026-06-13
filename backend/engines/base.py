@@ -13,6 +13,8 @@ class AnalysisResult:
     tags: list[str] = field(default_factory=list)
     description: str = ""
     slug: str = ""
+    location: str = ""
+    photographer: str = ""
     engine: str = ""
     raw_response: str = ""
 
@@ -26,6 +28,7 @@ class BaseEngine(ABC):
         image_bytes: bytes,
         file_name: str = "",
         folder_path: str = "",
+        extra_context: str = "",
     ) -> AnalysisResult:
         """
         Analyze an image and return structured result.
@@ -34,6 +37,7 @@ class BaseEngine(ABC):
             image_bytes: JPEG/PNG thumbnail bytes
             file_name: Original filename (context hint)
             folder_path: Folder path (context hint)
+            extra_context: Additional free-form context (e.g. adjacent filenames)
         """
         ...
 

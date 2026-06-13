@@ -105,6 +105,95 @@
   background: rgba(232, 163, 61, .08);
 }
 
+/* ── rename template builder ── */
+.tpl-builder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.tpl-empty {
+  font-size: 11px;
+  color: var(--faint);
+  align-self: center;
+}
+
+.tpl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 3px 6px 3px 9px;
+  border-radius: 5px;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+  background: rgba(232, 163, 61, .08);
+  cursor: grab;
+}
+.tpl-chip:active { cursor: grabbing; }
+
+.tpl-x {
+  background: none;
+  border: none;
+  color: var(--amber);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 1px;
+  opacity: .7;
+}
+.tpl-x:hover { opacity: 1; }
+
+.tpl-custom {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.tpl-custom input { flex: 1; }
+
+/* ── rename token chips & preview ── */
+.token-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.token-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  background: none;
+  font-family: var(--mono);
+  transition: all .15s var(--ease);
+}
+
+.token-chip:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.rename-preview {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--faint);
+  font-family: var(--mono);
+  word-break: break-all;
+}
+
+.rename-preview span {
+  color: var(--amber);
+}
+
 /* ── stats ── */
 .stat-row {
   display: flex;

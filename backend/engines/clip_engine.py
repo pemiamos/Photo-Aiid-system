@@ -65,6 +65,7 @@ class CLIPEngine(BaseEngine):
         image_bytes: bytes,
         file_name: str = "",
         folder_path: str = "",
+        extra_context: str = "",
     ) -> AnalysisResult:
         self._ensure_model()
         model = CLIPEngine._model

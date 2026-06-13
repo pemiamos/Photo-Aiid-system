@@ -9,12 +9,14 @@ from engines.base import BaseEngine
 from engines.claude_engine import ClaudeEngine
 from engines.ollama_engine import OllamaEngine
 from engines.gemini_engine import GeminiEngine
+from engines.zhipu_engine import ZhipuEngine
 
 # Registry: name -> engine class
 ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
     "claude": ClaudeEngine,
     "ollama": OllamaEngine,
     "gemini": GeminiEngine,
+    "zhipu": ZhipuEngine,
 }
 
 # Try to register CLIP (optional dependency)

@@ -5,14 +5,15 @@ const initialState = {
   photos: [],
   tags: [],
   settings: {
-    engine: 'claude',
+    engine: 'ollama',
     apiKey: '',
     geminiApiKey: '',
     geminiModel: 'gemini-2.5-flash',
+    zhipuApiKey: '',
     ollamaUrl: 'http://localhost:11434',
     ollamaModel: 'gemma4:31b',
     prefix: 'SDEXP',
-    template: '[前缀]_[AI标签]_[日期]_[序号]',
+    template: '[摄影师]_[地点]_[类别]_[日期]',
     folderPath: '',
   },
   engineStatus: 'idle',       // idle | busy | done | error
@@ -20,6 +21,7 @@ const initialState = {
   analysisProgress: null,     // { current, total } | null
   activeTab: 'gallery',       // gallery | index | about
   activeTag: null,
+  selectedIds: [],            // user-selected photo ids for 自选分析
   searchQuery: '',
   searchResults: null,        // null = no semantic search active
   stats: {
@@ -44,6 +46,9 @@ export const Actions = {
   SET_ANALYSIS_PROGRESS: 'SET_ANALYSIS_PROGRESS',
   SET_ACTIVE_TAB: 'SET_ACTIVE_TAB',
   SET_ACTIVE_TAG: 'SET_ACTIVE_TAG',
+  TOGGLE_SELECT: 'TOGGLE_SELECT',
+  SET_SELECTED: 'SET_SELECTED',
+  CLEAR_SELECTION: 'CLEAR_SELECTION',
   SET_SEARCH_QUERY: 'SET_SEARCH_QUERY',
   SET_SEARCH_RESULTS: 'SET_SEARCH_RESULTS',
   SET_STATS: 'SET_STATS',
@@ -95,6 +100,23 @@ function photoReducer(state, action) {
     case Actions.SET_ACTIVE_TAG:
       return { ...state, activeTag: action.payload }
 
+    case Actions.TOGGLE_SELECT: {
+      const id = action.payload
+      const exists = state.selectedIds.includes(id)
+      return {
+        ...state,
+        selectedIds: exists
+          ? state.selectedIds.filter(x => x !== id)
+          : [...state.selectedIds, id],
+      }
+    }
+
+    case Actions.SET_SELECTED:
+      return { ...state, selectedIds: action.payload || [] }
+
+    case Actions.CLEAR_SELECTION:
+      return { ...state, selectedIds: [] }
+
     case Actions.SET_SEARCH_QUERY:
       return { ...state, searchQuery: action.payload }
 
@@ -110,8 +132,14 @@ function photoReducer(state, action) {
     case Actions.CLEAR_ALL:
       return {
         ...initialState,
-        settings: state.settings,   // preserve settings on clear
+        settings: state.settings,           // preserve settings on clear
         activeTab: state.activeTab,
+        // Preserve in-flight job status so switching folders (which dispatches
+        // CLEAR_ALL) does not interrupt the scan/analysis polling that loads
+        // photos into the gallery.
+        scanStatus: state.scanStatus,
+        engineStatus: state.engineStatus,
+        analysisProgress: state.analysisProgress,
       }
 
     default:

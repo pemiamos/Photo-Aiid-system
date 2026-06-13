@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS ai_results (
     tags        TEXT,        -- JSON array
     description TEXT,
     slug        TEXT,
+    location    TEXT,
+    photographer TEXT,
     engine      TEXT,
     raw_response TEXT,
     analyzed_at REAL    NOT NULL,
@@ -102,17 +104,27 @@ async def init_db():
     db = await get_db()
     try:
         await db.executescript(SCHEMA_SQL)
+        # Lightweight migrations for pre-existing databases (CREATE TABLE IF NOT
+        # EXISTS won't add new columns to an already-created table).
+        cols = await db.execute_fetchall("PRAGMA table_info(ai_results)")
+        col_names = {c["name"] for c in cols}
+        if "location" not in col_names:
+            await db.execute("ALTER TABLE ai_results ADD COLUMN location TEXT")
+        if "photographer" not in col_names:
+            await db.execute("ALTER TABLE ai_results ADD COLUMN photographer TEXT")
         # Seed defaults
         defaults = {
-            "engine": "claude",
+            "engine": "ollama",
             "claude_api_key": "",
             "claude_model": "claude-sonnet-4-6",
             "ollama_url": "http://localhost:11434",
-            "ollama_model": "gemma3:12b",
+            "ollama_model": "gemma4:31b",
             "gemini_api_key": "",
             "gemini_model": "gemini-2.5-flash",
-            "rename_prefix": "SDEXP",
-            "rename_template": "[前缀]_[AI标签]_[日期]_[序号]",
+            "zhipu_api_key": "",
+            "zhipu_model": "glm-4v-flash",
+            "rename_prefix": "",
+            "rename_template": "[摄影师]_[地点]_[类别]_[日期]",
             "analysis_concurrency": "2",
             "thumbnail_max_size": "512",
         }
@@ -227,13 +239,49 @@ async def get_photos_in_directory(root_path: str) -> dict[str, tuple[int, int, f
         await db.close()
 
 
+def _natural_key(name: str):
+    """Sort key that orders 'x (2)' before 'x (10)' (natural numeric order)."""
+    import re
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
+
+
+async def get_sibling_file_names(file_path: str, span: int = 4) -> list[str]:
+    """Return up to `span` file names before and after `file_path` within the
+    same immediate folder, in natural sort order (excluding the file itself)."""
+    norm = file_path.replace("\\", "/")
+    parent = norm.rsplit("/", 1)[0] if "/" in norm else ""
+    if not parent:
+        return []
+    db = await get_db()
+    try:
+        # Immediate children only: under parent/ but not in a deeper subdir.
+        rows = await db.execute_fetchall(
+            """SELECT file_name, file_path FROM photos
+               WHERE replace(file_path, '\\', '/') LIKE ?
+                 AND replace(file_path, '\\', '/') NOT LIKE ?""",
+            (f"{parent}/%", f"{parent}/%/%"),
+        )
+    finally:
+        await db.close()
+    siblings = sorted(rows, key=lambda r: _natural_key(r["file_name"]))
+    names = [r["file_name"] for r in siblings]
+    try:
+        idx = next(i for i, r in enumerate(siblings)
+                   if r["file_path"].replace("\\", "/") == norm)
+    except StopIteration:
+        return []
+    before = names[max(0, idx - span):idx]
+    after = names[idx + 1: idx + 1 + span]
+    return before + after
+
+
 async def get_photo(photo_id: int) -> Optional[dict]:
     db = await get_db()
     try:
         rows = await db.execute_fetchall(
             """SELECT p.*,
                       a.category, a.tags AS ai_tags, a.description AS ai_desc,
-                      a.slug, a.engine, a.analyzed_at,
+                      a.slug, a.location, a.photographer, a.engine, a.analyzed_at,
                       e.date_time_original, e.camera_model, e.lens_model,
                       e.f_number, e.iso, e.focal_length, e.exposure_time,
                       e.gps_lat, e.gps_lon
@@ -300,7 +348,7 @@ async def get_photos(
         rows = await db.execute_fetchall(
             f"""SELECT p.*,
                        a.category, a.tags AS ai_tags, a.description AS ai_desc,
-                       a.slug, a.engine, a.analyzed_at,
+                       a.slug, a.location, a.photographer, a.engine, a.analyzed_at,
                        e.date_time_original, e.camera_model, e.lens_model,
                        e.f_number, e.iso, e.focal_length, e.exposure_time,
                        e.gps_lat, e.gps_lon
@@ -368,26 +416,64 @@ async def upsert_ai_result(
     slug: str,
     engine: str,
     raw_response: str = "",
+    location: str = "",
+    photographer: str = "",
 ):
     now = time.time()
     db = await get_db()
     try:
         await db.execute(
-            """INSERT INTO ai_results (photo_id, category, tags, description, slug, engine, raw_response, analyzed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO ai_results (photo_id, category, tags, description, slug, location, photographer, engine, raw_response, analyzed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(photo_id) DO UPDATE SET
                  category=excluded.category, tags=excluded.tags,
                  description=excluded.description, slug=excluded.slug,
+                 location=excluded.location, photographer=excluded.photographer,
                  engine=excluded.engine, raw_response=excluded.raw_response,
                  analyzed_at=excluded.analyzed_at""",
             (photo_id, category, json.dumps(tags, ensure_ascii=False),
-             description, slug, engine, raw_response, now),
+             description, slug, location, photographer, engine, raw_response, now),
         )
         await db.execute(
             "UPDATE photos SET scan_status = 'done', updated_at = ? WHERE id = ?",
             (now, photo_id),
         )
         await db.commit()
+    finally:
+        await db.close()
+
+
+async def update_ai_fields(
+    photo_id: int,
+    *,
+    description: str | None = None,
+    tags: list[str] | None = None,
+    category: str | None = None,
+    location: str | None = None,
+    photographer: str | None = None,
+) -> bool:
+    """Update selected AI fields for one photo (only non-None fields)."""
+    sets, params = [], []
+    if description is not None:
+        sets.append("description = ?"); params.append(description)
+    if tags is not None:
+        sets.append("tags = ?"); params.append(json.dumps(tags, ensure_ascii=False))
+    if category is not None:
+        sets.append("category = ?"); params.append(category)
+    if location is not None:
+        sets.append("location = ?"); params.append(location)
+    if photographer is not None:
+        sets.append("photographer = ?"); params.append(photographer)
+    if not sets:
+        return False
+    params.append(photo_id)
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            f"UPDATE ai_results SET {', '.join(sets)} WHERE photo_id = ?", params
+        )
+        await db.commit()
+        return cur.rowcount > 0
     finally:
         await db.close()
 
@@ -510,11 +596,13 @@ def _row_to_photo(row) -> dict:
             "tags": tags,
             "description": ai_desc,
             "slug": d.get("slug"),
+            "location": d.get("location"),
+            "photographer": d.get("photographer"),
             "engine": d.get("engine"),
             "analyzed_at": d.get("analyzed_at"),
         }
     # Clean up duplicated keys
-    for k in ("category", "slug", "engine", "analyzed_at", "raw_response"):
+    for k in ("category", "slug", "location", "photographer", "engine", "analyzed_at", "raw_response"):
         d.pop(k, None)
 
     d["exif"] = None

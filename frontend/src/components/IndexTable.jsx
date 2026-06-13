@@ -35,6 +35,18 @@ export default function IndexTable() {
     return s.length >= 3 ? `${s[0]}-${s[1]}-${s[2]}` : '—'
   }
 
+  // Combined shooting parameters (excluding GPS): focal · aperture · shutter · ISO
+  const fmtShot = (exif) => {
+    if (!exif) return '—'
+    const parts = [
+      exif.focal_length && `${Math.round(exif.focal_length)}mm`,
+      exif.f_number && `f/${(+exif.f_number).toFixed(1)}`,
+      exif.exposure_time && `${exif.exposure_time}s`,
+      exif.iso && `ISO${exif.iso}`,
+    ].filter(Boolean)
+    return parts.length ? parts.join(' · ') : '—'
+  }
+
   const handleRename = async () => {
     const analyzablePhotos = filteredPhotos.filter(p => p.ai)
     const count = analyzablePhotos.length
@@ -78,9 +90,13 @@ export default function IndexTable() {
             <tr>
               <th style={{ width: 46 }}>帧号</th>
               <th>原文件名</th>
+              <th>摄影师</th>
               <th>AI 标签</th>
+              <th>地点</th>
               <th>拍摄日期</th>
-              <th>器材</th>
+              <th>相机</th>
+              <th>镜头</th>
+              <th>拍摄参数</th>
               <th>建议新名</th>
             </tr>
           </thead>
@@ -89,12 +105,16 @@ export default function IndexTable() {
               <tr key={p.id}>
                 <td className="mono">{String(p.id).padStart(3, '0')}</td>
                 <td className="mono">{p.file_name}</td>
+                <td>{p.ai?.photographer || <span className="faint">—</span>}</td>
                 <td>{p.ai
                   ? [p.ai.category, ...(p.ai.tags || [])].join('、')
                   : <span className="faint">—</span>}
                 </td>
+                <td>{p.ai?.location || <span className="faint">—</span>}</td>
                 <td className="mono">{fmtDate(p.exif?.date_time_original)}</td>
                 <td className="mono">{p.exif?.camera_model || '—'}</td>
+                <td className="mono">{p.exif?.lens_model || '—'}</td>
+                <td className="mono">{fmtShot(p.exif)}</td>
                 <td>{p.ai
                   ? <span className="new-name">{p.suggested_name || p.ai.category}</span>
                   : '—'}

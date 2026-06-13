@@ -7,6 +7,7 @@ Supports incremental scanning (skips files with same path+size+mtime).
 """
 
 import asyncio
+import hashlib
 import logging
 import mimetypes
 import os
@@ -17,6 +18,15 @@ from PIL import Image, ExifTags
 import database as db
 
 logger = logging.getLogger(__name__)
+
+# Central thumbnail cache, kept out of the user's photo folders.
+# Override with the PHOTO_AIID_THUMB_DIR env var if desired.
+THUMBNAIL_ROOT = Path(
+    os.environ.get(
+        "PHOTO_AIID_THUMB_DIR",
+        str(Path(__file__).resolve().parent.parent / ".thumbnails"),
+    )
+)
 
 IMAGE_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".gif", ".webp",
@@ -39,21 +49,28 @@ def is_image_file(path: Path) -> bool:
     return path.suffix.lower() in IMAGE_EXTENSIONS
 
 
-def get_thumbnail_dir(root_path: str) -> Path:
-    """Return the .thumbnails directory inside the scanned root."""
-    thumb_dir = Path(root_path) / ".thumbnails"
-    thumb_dir.mkdir(parents=True, exist_ok=True)
-    return thumb_dir
+def get_thumbnail_dir(root_path: str | None = None) -> Path:
+    """Return the central thumbnail cache directory (not inside user folders)."""
+    THUMBNAIL_ROOT.mkdir(parents=True, exist_ok=True)
+    return THUMBNAIL_ROOT
 
 
 def get_thumbnail_path(root_path: str, relative_path: str) -> Path:
-    """Compute thumbnail path preserving relative structure."""
-    thumb_dir = get_thumbnail_dir(root_path)
-    # Use relative path with flattened separators for uniqueness
-    safe_name = relative_path.replace("/", "__").replace("\\", "__")
-    # Always save thumbnails as JPEG
-    name = Path(safe_name).stem + ".jpg"
-    return thumb_dir / name
+    """Compute a stable thumbnail path in the central cache.
+
+    The filename is derived from root_path + relative_path so thumbnails from
+    different scanned folders never collide, while staying deterministic for
+    the same source image.
+    """
+    thumb_dir = get_thumbnail_dir()
+    norm_root = str(root_path).replace("\\", "/").rstrip("/")
+    norm_rel = str(relative_path).replace("\\", "/")
+    key = f"{norm_root}::{norm_rel}"
+    digest = hashlib.md5(key.encode("utf-8")).hexdigest()
+    # Keep a readable stem prefix for easier debugging, then the hash.
+    stem = Path(norm_rel).stem[:40]
+    safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)
+    return thumb_dir / f"{safe_stem}_{digest}.jpg"
 
 
 def generate_thumbnail(image_path: str, output_path: Path, max_size: int = 512) -> bool:
@@ -208,7 +225,23 @@ def extract_exif(image_path: str) -> dict:
     except Exception as e:
         logger.debug(f"EXIF extraction failed for {image_path}: {e}")
 
+    # No shooting time in EXIF → fall back to the file's creation time
+    # (st_birthtime on macOS), else modification time.
+    if not result["date_time_original"]:
+        result["date_time_original"] = _file_datetime(image_path)
+
     return result
+
+
+def _file_datetime(path: str) -> str | None:
+    """Return the file's creation/modification time as EXIF-style string."""
+    try:
+        st = os.stat(path)
+        ts = getattr(st, "st_birthtime", None) or st.st_mtime
+        from datetime import datetime
+        return datetime.fromtimestamp(ts).strftime("%Y:%m:%d %H:%M:%S")
+    except Exception:
+        return None
 
 
 def get_image_dimensions(image_path: str) -> tuple[int, int]:

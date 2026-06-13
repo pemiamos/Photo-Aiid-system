@@ -1,9 +1,40 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { usePhotoStore, usePhotoDispatch, Actions } from '../stores/photoStore'
 import * as api from '../services/api'
 import './Sidebar.css'
 
+const RENAME_TOKENS = ['[摄影师]', '[地点]', '[类别]', '[标签]', '[日期]', '[相机]', '[序号]']
+
+// Mirror of backend render_template: drop empty tokens and the separator that
+// would dangle next to them.
+function renderTemplate(template, fields) {
+  const re = /\[[^\[\]]+\]/g
+  const pieces = []
+  let pos = 0, m
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > pos) pieces.push(['lit', template.slice(pos, m.index)])
+    pieces.push(['tok', m[0]])
+    pos = m.index + m[0].length
+  }
+  if (pos < template.length) pieces.push(['lit', template.slice(pos)])
+
+  const out = []
+  let haveValue = false, pendingSep = ''
+  for (const [kind, text] of pieces) {
+    if (kind === 'lit') { pendingSep += text; continue }
+    const val = (fields[text] || '').toString().trim()
+    if (val) {
+      if (haveValue && pendingSep) out.push(pendingSep)
+      out.push(val)
+      haveValue = true
+    }
+    pendingSep = ''
+  }
+  return out.join('').replace(/^[_\-. ]+|[_\-. ]+$/g, '') || '未命名'
+}
+
 const ENGINES = [
+  { value: 'zhipu',  label: '智谱 GLM' },
   { value: 'claude', label: 'Claude API' },
   { value: 'gemini', label: 'Gemini API' },
   { value: 'ollama', label: 'Ollama 本地' },
@@ -13,10 +44,31 @@ const ENGINES = [
 export default function Sidebar() {
   const state = usePhotoStore()
   const dispatch = usePhotoDispatch()
-  const { photos, tags, settings, engineStatus, stats, activeTag } = state
+  const { photos, tags, settings, engineStatus, stats, activeTag, selectedIds } = state
 
   const [testResult, setTestResult] = useState(null)
   const [scanning, setScanning] = useState(false)
+  const [customChip, setCustomChip] = useState('')
+  const dragIdx = useRef(null)
+
+  // Rename template as an ordered list of "_"-joined chips.
+  const templateChips = (settings.template || '').split('_').filter(Boolean)
+  const setChips = (arr) => updateSetting('template', arr.join('_'))
+  const addChip = (tok) => setChips([...templateChips, tok])
+  const removeChip = (i) => setChips(templateChips.filter((_, x) => x !== i))
+  const moveChip = (to) => {
+    const from = dragIdx.current
+    if (from == null || from === to) return
+    const arr = [...templateChips]
+    const [m] = arr.splice(from, 1)
+    arr.splice(to, 0, m)
+    dragIdx.current = null
+    setChips(arr)
+  }
+  const addCustomChip = () => {
+    const v = customChip.trim()
+    if (v) { addChip(v); setCustomChip('') }
+  }
   const [isDragging, setIsDragging] = useState(false)
 
   /* ── global drag over preventer to stop page navigation ── */
@@ -185,36 +237,54 @@ export default function Sidebar() {
   useEffect(() => {
     if (state.engineStatus !== 'busy') return
 
+    // The backend batch starts asynchronously, so the first few polls may see
+    // running=false before it spins up. Don't declare "finished" until we've
+    // actually observed running=true at least once — otherwise the very first
+    // poll races the batch start and prematurely flips back to 'done' (which
+    // made analysis appear to need two clicks). A startup grace window avoids
+    // getting stuck busy if the batch never starts.
+    let sawRunning = false
+    const startedAt = Date.now()
+    const STARTUP_GRACE_MS = 8000
+
     const fetchAnalysisProgressAndPhotos = async () => {
       try {
         const progress = await api.getAnalysisProgress()
-        if (progress) {
-          if (progress.running) {
-            dispatch({
-              type: Actions.SET_ANALYSIS_PROGRESS,
-              payload: { current: progress.completed, total: progress.total }
-            })
-            // Poll photos to update cards dynamically
-            const photoRes = await api.getPhotos({ folder_path: settings.folderPath })
-            if (photoRes && photoRes.photos) {
-              dispatch({ type: Actions.SET_PHOTOS, payload: photoRes.photos })
+        if (!progress) return
+
+        if (progress.running) {
+          sawRunning = true
+          dispatch({
+            type: Actions.SET_ANALYSIS_PROGRESS,
+            payload: {
+              current: progress.completed,
+              total: progress.total,
+              elapsed: progress.elapsed_seconds,
+              eta: progress.eta_seconds,
+              paused: progress.paused,
             }
-            // Update tags
-            const tagsList = await api.getTags()
-            dispatch({ type: Actions.SET_TAGS, payload: tagsList })
-          } else {
-            // Background analysis finished
-            dispatch({ type: Actions.SET_ENGINE_STATUS, payload: 'done' })
-            dispatch({ type: Actions.SET_ANALYSIS_PROGRESS, payload: null })
-            // Final refresh
-            const photoRes = await api.getPhotos({ folder_path: settings.folderPath })
-            if (photoRes && photoRes.photos) {
-              dispatch({ type: Actions.SET_PHOTOS, payload: photoRes.photos })
-            }
-            const tagsList = await api.getTags()
-            dispatch({ type: Actions.SET_TAGS, payload: tagsList })
+          })
+          // Poll photos to update cards dynamically
+          const photoRes = await api.getPhotos({ folder_path: settings.folderPath })
+          if (photoRes && photoRes.photos) {
+            dispatch({ type: Actions.SET_PHOTOS, payload: photoRes.photos })
           }
+          // Update tags
+          const tagsList = await api.getTags()
+          dispatch({ type: Actions.SET_TAGS, payload: tagsList })
+        } else if (sawRunning || Date.now() - startedAt > STARTUP_GRACE_MS) {
+          // Either the batch ran and is now done, or it never started within
+          // the grace window — finish up and refresh once.
+          dispatch({ type: Actions.SET_ENGINE_STATUS, payload: 'done' })
+          dispatch({ type: Actions.SET_ANALYSIS_PROGRESS, payload: null })
+          const photoRes = await api.getPhotos({ folder_path: settings.folderPath })
+          if (photoRes && photoRes.photos) {
+            dispatch({ type: Actions.SET_PHOTOS, payload: photoRes.photos })
+          }
+          const tagsList = await api.getTags()
+          dispatch({ type: Actions.SET_TAGS, payload: tagsList })
         }
+        // else: batch not started yet, keep waiting within the grace window
       } catch (err) {
         console.error("Polling analysis progress failed:", err)
       }
@@ -227,17 +297,39 @@ export default function Sidebar() {
     return () => clearInterval(intervalId)
   }, [state.engineStatus, settings.folderPath, dispatch])
 
-  /* ── analyze ── */
-  const handleAnalyze = useCallback(async () => {
-    // Filter photos to only those that are currently displayed and in queued/error status
-    const targets = photos.filter(p => p.scan_status === 'queued' || p.scan_status === 'error')
-    if (targets.length === 0) {
-      alert("当前展示的图片中没有需要分析的照片（均已分析完成）。")
-      return
-    }
+  /* ── filter photos by current folder path ── */
+  const normalizePath = (p) => p ? p.normalize('NFC').replace(/\\/g, '/').replace(/\/$/, '') : ''
+  const currentFolder = normalizePath(settings.folderPath)
+  const folderPhotos = currentFolder
+    ? photos.filter(p => p.file_path && normalizePath(p.file_path).startsWith(currentFolder))
+    : photos
 
+  // Live rename preview using the first analyzed photo in the folder.
+  const previewPhoto = folderPhotos.find(p => p.ai)
+  let renamePreview = ''
+  if (previewPhoto) {
+    const ai = previewPhoto.ai || {}
+    const exif = previewPhoto.exif || {}
+    const date = (exif.date_time_original || '').replace(/[-:]/g, '').split(' ')[0].slice(0, 8)
+    const tags = ai.tags || []
+    const ext = (previewPhoto.file_name.match(/\.[a-zA-Z0-9]+$/) || ['.jpg'])[0]
+    renamePreview = renderTemplate(settings.template || '', {
+      '[前缀]': settings.prefix,
+      '[摄影师]': ai.photographer,
+      '[地点]': ai.location,
+      '[类别]': ai.category,
+      '[标签]': tags[0] || '',
+      '[日期]': date,
+      '[相机]': exif.camera_model,
+      '[序号]': '001',
+    }) + ext
+  }
+
+  /* ── analyze (shared runner) ── */
+  const runAnalysis = useCallback(async (photoIds) => {
+    if (!photoIds || photoIds.length === 0) return
     dispatch({ type: Actions.SET_ENGINE_STATUS, payload: 'busy' })
-    dispatch({ type: Actions.SET_ANALYSIS_PROGRESS, payload: { current: 0, total: targets.length } })
+    dispatch({ type: Actions.SET_ANALYSIS_PROGRESS, payload: { current: 0, total: photoIds.length } })
     try {
       // Sync settings to backend first to ensure keys/model are stored
       await api.updateSettings({
@@ -245,6 +337,7 @@ export default function Sidebar() {
         claude_api_key: settings.apiKey,
         gemini_api_key: settings.geminiApiKey,
         gemini_model: settings.geminiModel,
+        zhipu_api_key: settings.zhipuApiKey,
         ollama_url: settings.ollamaUrl,
         ollama_model: settings.ollamaModel,
         rename_prefix: settings.prefix,
@@ -252,7 +345,7 @@ export default function Sidebar() {
       })
 
       await api.analyzePhotos({
-        photo_ids: targets.map(p => p.id),
+        photo_ids: photoIds,
         engine: settings.engine,
         concurrency: 1, // Gemini/Claude is serialized to avoid rate-limiting, Ollama/CLIP is concurrency controlled by backend
       })
@@ -261,7 +354,34 @@ export default function Sidebar() {
       dispatch({ type: Actions.SET_ENGINE_STATUS, payload: 'error' })
       dispatch({ type: Actions.SET_ANALYSIS_PROGRESS, payload: null })
     }
-  }, [photos, settings, dispatch])
+  }, [settings, dispatch])
+
+  /* ── 全局分析：整个文件夹中尚未分析（待分析/失败）的照片 ── */
+  const handleAnalyzeAll = useCallback(async () => {
+    const targets = folderPhotos.filter(p => p.scan_status === 'queued' || p.scan_status === 'error')
+    if (targets.length === 0) {
+      alert("当前文件夹没有需要分析的照片（均已分析完成）。")
+      return
+    }
+    await runAnalysis(targets.map(p => p.id))
+  }, [folderPhotos, runAnalysis])
+
+  /* ── 自选分析：仅分析用户点选的照片中尚未分析（待分析/失败）的 ── */
+  const handleAnalyzeSelected = useCallback(async () => {
+    if (selectedIds.length === 0) {
+      alert("请先在画廊中点选要分析的照片，再点「自选分析」。")
+      return
+    }
+    const selectedSet = new Set(selectedIds)
+    const targets = folderPhotos.filter(
+      p => selectedSet.has(p.id) && (p.scan_status === 'queued' || p.scan_status === 'error')
+    )
+    if (targets.length === 0) {
+      alert("选中的照片均已分析完成，无需重复分析。")
+      return
+    }
+    await runAnalysis(targets.map(p => p.id))
+  }, [selectedIds, folderPhotos, runAnalysis])
 
   /* ── clear ── */
   const handleClear = useCallback(() => {
@@ -279,13 +399,6 @@ export default function Sidebar() {
       setTestResult({ status: 'error', message: `✗ 连接失败: ${err.message}` })
     }
   }, [settings.engine])
-
-  /* ── filter photos by current folder path ── */
-  const normalizePath = (p) => p ? p.normalize('NFC').replace(/\\/g, '/').replace(/\/$/, '') : ''
-  const currentFolder = normalizePath(settings.folderPath)
-  const folderPhotos = currentFolder
-    ? photos.filter(p => p.file_path && normalizePath(p.file_path).startsWith(currentFolder))
-    : photos
 
   /* ── collect all tags from folder photos ── */
   const allTags = []
@@ -374,6 +487,26 @@ export default function Sidebar() {
           ))}
         </select>
 
+        {settings.engine === 'zhipu' && (
+          <div className="engine-config">
+            <label className="sidebar-field">API Key</label>
+            <input
+              type="password"
+              placeholder="xxxxxxxx.xxxxxxxx"
+              value={settings.zhipuApiKey || ''}
+              onChange={e => updateSetting('zhipuApiKey', e.target.value)}
+            />
+            <div className="sidebar-hint">
+              默认 glm-4v-flash（免费视觉模型）
+              <br />
+              <a href="https://open.bigmodel.cn/usercenter/apikeys" target="_blank" rel="noreferrer" style={{color:'var(--amber)'}}>
+                open.bigmodel.cn
+              </a>
+              {' '}获取 Key
+            </div>
+          </div>
+        )}
+
         {settings.engine === 'claude' && (
           <div className="engine-config">
             <label className="sidebar-field">API Key</label>
@@ -398,13 +531,9 @@ export default function Sidebar() {
               value={settings.geminiApiKey || ''}
               onChange={e => updateSetting('geminiApiKey', e.target.value)}
             />
-            <label className="sidebar-field">模型</label>
-            <input
-              type="text"
-              value={settings.geminiModel || 'gemini-2.5-flash'}
-              onChange={e => updateSetting('geminiModel', e.target.value)}
-            />
             <div className="sidebar-hint">
+              默认使用 gemini-2.5-flash
+              <br />
               <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" style={{color:'var(--amber)'}}>
                 aistudio.google.com/apikey
               </a>
@@ -447,21 +576,54 @@ export default function Sidebar() {
       {/* ── 重命名模板 ── */}
       <div className="sidebar-section">
         <h3>重命名模板</h3>
-        <label className="sidebar-field">前缀</label>
-        <input
-          type="text"
-          value={settings.prefix}
-          onChange={e => updateSetting('prefix', e.target.value)}
-        />
-        <label className="sidebar-field">模板</label>
-        <input
-          type="text"
-          value={settings.template}
-          onChange={e => updateSetting('template', e.target.value)}
-        />
+        <label className="sidebar-field">拖动排序，× 删除</label>
+        <div className="tpl-builder">
+          {templateChips.length === 0 && (
+            <span className="tpl-empty">从下方添加字段块…</span>
+          )}
+          {templateChips.map((chip, i) => (
+            <span
+              key={`${chip}-${i}`}
+              className="tpl-chip"
+              draggable
+              onDragStart={() => { dragIdx.current = i }}
+              onDragOver={e => e.preventDefault()}
+              onDrop={() => moveChip(i)}
+            >
+              {chip}
+              <button className="tpl-x" onClick={() => removeChip(i)}>×</button>
+            </span>
+          ))}
+        </div>
+
+        <label className="sidebar-field">可添加字段</label>
+        <div className="token-chips">
+          {RENAME_TOKENS.map(t => (
+            <button key={t} type="button" className="token-chip"
+              title="添加到模板" onClick={() => addChip(t)}>
+              {t}
+            </button>
+          ))}
+        </div>
+
+        <div className="tpl-custom">
+          <input
+            type="text"
+            placeholder="自定义块，如 [活动] 或 婚礼"
+            value={customChip}
+            onChange={e => setCustomChip(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') addCustomChip() }}
+          />
+          <button className="token-chip" onClick={addCustomChip}>添加</button>
+        </div>
+
+        {renamePreview && (
+          <div className="rename-preview">
+            预览：<span>{renamePreview}</span>
+          </div>
+        )}
         <div className="sidebar-hint">
-          占位符：[前缀] [AI标签] [日期] [序号]
-          <br />重名自动加 -2/-3 后缀
+          空字段自动省略，重名自动加 -2/-3 后缀
         </div>
       </div>
 
@@ -501,10 +663,21 @@ export default function Sidebar() {
       <div className="sidebar-section">
         <button
           className="btn primary"
-          onClick={handleAnalyze}
+          onClick={handleAnalyzeAll}
           disabled={folderPhotos.length === 0 || engineStatus === 'busy'}
+          title="分析整个文件夹中尚未分析的照片"
         >
-          {engineStatus === 'busy' ? '分析中…' : '开始 AI 分析'}
+          {engineStatus === 'busy' ? '分析中…' : '全局分析'}
+        </button>
+        <button
+          className="btn primary"
+          onClick={handleAnalyzeSelected}
+          disabled={selectedIds.length === 0 || engineStatus === 'busy'}
+          title="仅分析在画廊中点选的照片"
+        >
+          {engineStatus === 'busy'
+            ? '分析中…'
+            : `自选分析${selectedIds.length ? ` (${selectedIds.length})` : ''}`}
         </button>
         <button
           className="btn ghost"

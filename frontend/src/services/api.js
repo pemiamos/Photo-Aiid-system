@@ -88,6 +88,28 @@ export async function analyzeOne(photoId) {
   return request(`/analyze/${photoId}`, { method: 'POST' })
 }
 
+export async function editPhotoAI(photoId, fields) {
+  return request(`/photos/${photoId}/ai`, {
+    method: 'PATCH',
+    body: JSON.stringify(fields),
+  })
+}
+
+export async function batchEditAI(payload) {
+  return request('/photos/ai/batch', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function pauseAnalysis() {
+  return request('/analyze/pause', { method: 'POST' })
+}
+
+export async function resumeAnalysis() {
+  return request('/analyze/resume', { method: 'POST' })
+}
+
 /* ── Rename ── */
 export async function renamePhotos(options = {}) {
   return request('/rename', {

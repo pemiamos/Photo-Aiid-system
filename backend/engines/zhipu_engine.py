@@ -1,12 +1,15 @@
 """
-Claude Vision API engine for Photo-Aiid-system.
+Zhipu AI (智谱 GLM) Vision engine for Photo-Aiid-system.
 
-Sends images as base64 to Anthropic's Messages API with the TAG_PROMPT,
-parses JSON response for category/tags/desc/slug.
+Uses the OpenAI-compatible chat-completions endpoint with a base64 image.
+Default model `glm-4v-flash` is free and vision-capable.
+Parses JSON response for category/tags/desc/location/slug.
 """
 
 import base64
 import json
+import re
+
 import httpx
 
 from engines.base import BaseEngine, AnalysisResult
@@ -20,14 +23,20 @@ Respond with ONLY a JSON object, no markdown fences, no preamble:
 {"category":"主类别：若文件名或文件夹中含具体地点/事件/物种名，则优先采用它（如 兰亭、阳澄湖、白鹭、龙舟赛）；否则用你识别的画面大类(2-4字，如 自然风光/人像/美食/建筑/街拍)。无论如何 tags 都要由你识别生成、不可省略","tags":["3到6个中文标签，可包含从文件名/文件夹推断出的地点/事件/项目等信息"],"desc":"一句不超过30字的中文画面描述（如有摄影师/地名需包含）","location":"拍摄地点（市/县级）：优先采用文件名/文件夹中的明确地名，否则结合画面地标推断到市县级；不要包含国家和省份，多级地名用-连接（如 苏州-甪直、绍兴-兰亭、盐城）；无法判断则留空","photographer":"摄影师的姓名或昵称：从文件名或文件夹中提取，可能是真名/昵称/网名/拼音（如 戴频、老王、Ansel）；无法判断则留空字符串","slug":"short-english-slug-for-filename"}"""
 
 
-class ClaudeEngine(BaseEngine):
-    """Claude Vision API – cloud-based high-accuracy analysis."""
+class ZhipuEngine(BaseEngine):
+    """Zhipu AI (智谱 GLM) Vision API – cloud-based, glm-4v-flash is free."""
 
-    API_URL = "https://api.anthropic.com/v1/messages"
+    API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
-    def __init__(self, api_key: str = "", model: str = "claude-sonnet-4-6", **kwargs):
+    def __init__(self, api_key: str = "", model: str = "glm-4v-flash", **kwargs):
         self.api_key = api_key
         self.model = model
+
+    def _headers(self):
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
 
     async def analyze(
         self,
@@ -37,11 +46,11 @@ class ClaudeEngine(BaseEngine):
         extra_context: str = "",
     ) -> AnalysisResult:
         if not self.api_key:
-            raise ValueError("Claude API key is required. Set it in settings.")
+            raise ValueError("Zhipu API key is required. Set it in settings.")
 
         b64 = base64.b64encode(image_bytes).decode("utf-8")
 
-        # Build context text from filename/folder
+        # Build context text from filename/folder/neighbors
         context_lines = []
         if file_name:
             context_lines.append(f"文件名：{file_name}")
@@ -59,18 +68,13 @@ class ClaudeEngine(BaseEngine):
 
         payload = {
             "model": self.model,
-            "max_tokens": 1000,
             "messages": [
                 {
                     "role": "user",
                     "content": [
                         {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": b64,
-                            },
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
                         },
                         {"type": "text", "text": prompt},
                     ],
@@ -78,23 +82,23 @@ class ClaudeEngine(BaseEngine):
             ],
         }
 
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01",
-        }
-
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(self.API_URL, json=payload, headers=headers)
+            resp = await client.post(self.API_URL, json=payload, headers=self._headers())
 
         if resp.status_code != 200:
-            raise RuntimeError(f"Claude API error {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(f"Zhipu API error {resp.status_code}: {resp.text[:300]}")
 
         data = resp.json()
         text = ""
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                text += block["text"]
+        for choice in data.get("choices", []):
+            msg = choice.get("message", {})
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                text += content
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and "text" in part:
+                        text += part["text"]
 
         return self._parse_response(text)
 
@@ -104,33 +108,24 @@ class ClaudeEngine(BaseEngine):
         try:
             payload = {
                 "model": self.model,
-                "max_tokens": 10,
                 "messages": [{"role": "user", "content": "回复一个字：通"}],
-            }
-            headers = {
-                "Content-Type": "application/json",
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
+                "max_tokens": 10,
             }
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(self.API_URL, json=payload, headers=headers)
+                resp = await client.post(self.API_URL, json=payload, headers=self._headers())
             if resp.status_code == 200:
-                return {"ok": True, "message": "Claude API connection OK"}
-            else:
-                return {"ok": False, "message": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+                return {"ok": True, "message": f"Zhipu API connection OK (model: {self.model})"}
+            return {"ok": False, "message": f"HTTP {resp.status_code}: {resp.text[:200]}"}
         except Exception as e:
             return {"ok": False, "message": str(e)}
 
     @staticmethod
     def _parse_response(text: str) -> AnalysisResult:
-        """Extract JSON from Claude's text response."""
-        # Strip markdown fences if present
+        """Extract JSON from the model's text response."""
         cleaned = text.replace("```json", "").replace("```", "").strip()
-        # Find JSON object
-        import re
         m = re.search(r"\{[\s\S]*\}", cleaned)
         if not m:
-            raise ValueError(f"Cannot parse JSON from Claude response: {text[:200]}")
+            raise ValueError(f"Cannot parse JSON from Zhipu response: {text[:200]}")
         obj = json.loads(m.group(0))
         return AnalysisResult(
             category=obj.get("category", ""),
@@ -139,6 +134,6 @@ class ClaudeEngine(BaseEngine):
             slug=obj.get("slug", ""),
             location=obj.get("location", ""),
             photographer=obj.get("photographer", ""),
-            engine="claude",
+            engine="zhipu",
             raw_response=text,
         )

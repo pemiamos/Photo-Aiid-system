@@ -7,11 +7,13 @@ Dispatches to Claude / Ollama / CLIP and stores results in the database.
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 
 import database as db
 from engines import get_engine
 from engines.base import AnalysisResult
+from services import geocode
 from services.scanner import get_thumbnail_path
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,76 @@ analysis_progress: dict = {
     "completed": 0,
     "errors": 0,
     "current_file": "",
+    "paused": False,
+    "started_at": 0.0,
+    "elapsed_seconds": 0.0,   # active time, excluding paused spans
+    "eta_seconds": None,      # estimated remaining seconds
 }
+
+# Guard against overlapping batches. Set synchronously (before any await) so two
+# near-simultaneous /api/analyze requests cannot both start a batch and double
+# the request rate against rate-limited cloud APIs.
+_batch_active = False
+
+# Pause/resume control. Event is "set" while running, "clear" while paused.
+_pause_event = asyncio.Event()
+_pause_event.set()
+# Accumulators for active-time accounting (excludes paused spans).
+_active_start = 0.0       # wall-clock time the current active span began
+_active_accum = 0.0       # total active seconds accumulated before current span
+
+
+def pause_analysis() -> dict:
+    """Pause the running batch (takes effect before the next photo)."""
+    global _active_accum, _active_start
+    if _pause_event.is_set() and analysis_progress.get("running"):
+        # Close the current active span.
+        if _active_start:
+            _active_accum += time.time() - _active_start
+            _active_start = 0.0
+        _pause_event.clear()
+        analysis_progress["paused"] = True
+    return get_analysis_progress()
+
+
+def resume_analysis() -> dict:
+    """Resume a paused batch."""
+    global _active_start
+    if not _pause_event.is_set():
+        _active_start = time.time()
+        _pause_event.set()
+        analysis_progress["paused"] = False
+    return get_analysis_progress()
+
+
+import re as _re
+from pathlib import PurePath as _PurePath
+
+
+def guess_photographer(file_name: str, folder_path: str) -> str:
+    """Heuristic fallback: pull a likely photographer name (real name or
+    nickname) from the leading segment of the filename or folder.
+
+    Names are commonly written as "<name>-<subject>" or "<name>_<subject>",
+    e.g. "戴频-盐城滩涂", "老王_西湖", "Ansel-yosemite".
+    """
+    candidates = []
+    if file_name:
+        candidates.append(_PurePath(file_name).stem)
+    if folder_path:
+        # innermost folder first, then outer
+        candidates.extend(reversed(str(folder_path).replace("\\", "/").split("/")))
+
+    for cand in candidates:
+        head = _re.split(r"[-_—–]", cand.strip(), maxsplit=1)[0].strip()
+        if not head:
+            continue
+        # Chinese name/nickname (2-4 漢字) or an ASCII name (letters only, 2-12).
+        if _re.fullmatch(r"[一-鿿]{2,4}", head):
+            return head
+        if _re.fullmatch(r"[A-Za-z][A-Za-z.]{1,11}", head):
+            return head
+    return ""
 
 
 async def analyze_single(photo_id: int, engine_name: str | None = None) -> AnalysisResult:
@@ -49,6 +120,9 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
     elif engine_name == "gemini":
         engine_kwargs["api_key"] = settings.get("gemini_api_key", "")
         engine_kwargs["model"] = settings.get("gemini_model", "gemini-2.5-flash")
+    elif engine_name == "zhipu":
+        engine_kwargs["api_key"] = settings.get("zhipu_api_key", "")
+        engine_kwargs["model"] = settings.get("zhipu_model", "glm-4v-flash")
 
     engine = get_engine(engine_name, **engine_kwargs)
 
@@ -86,6 +160,21 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
     else:
         folder_path = root_name
 
+    # GPS-based location takes priority over AI inference (offline geocoding).
+    exif = photo.get("exif") or {}
+    gps_location = geocode.reverse_geocode(exif.get("gps_lat"), exif.get("gps_lon"))
+
+    # Build extra context for the prompt: adjacent sequence filenames (naming
+    # continuity) + the GPS place name (so the model can dedup filename places
+    # against it, per the prompt rules).
+    neighbors = await db.get_sibling_file_names(file_path)
+    ctx_parts = []
+    if neighbors:
+        ctx_parts.append(f"相邻序列文件名：{', '.join(neighbors)}")
+    if gps_location:
+        ctx_parts.append(f"GPS定位地名：{gps_location}")
+    extra_context = "\n".join(ctx_parts)
+
     await db.update_photo_status(photo_id, "analyzing")
 
     # Retry with backoff for rate-limit (429) errors
@@ -96,6 +185,17 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
                 image_bytes=image_bytes,
                 file_name=photo["file_name"],
                 folder_path=folder_path,
+                extra_context=extra_context,
+            )
+
+            # Prefer precise GPS location; fall back to AI-inferred location.
+            # Normalize: drop country/province, join levels with '-'.
+            final_location = geocode.normalize_location(gps_location or result.location)
+
+            # Photographer: prefer the model's field, fall back to a filename/
+            # folder heuristic so a name is never silently dropped.
+            final_photographer = result.photographer or guess_photographer(
+                photo["file_name"], folder_path
             )
 
             # Store results
@@ -105,10 +205,14 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
                 tags=result.tags,
                 description=result.description,
                 slug=result.slug,
+                location=final_location,
+                photographer=final_photographer,
                 engine=result.engine,
                 raw_response=result.raw_response,
             )
 
+            result.location = final_location
+            result.photographer = final_photographer
             return result
 
         except (RuntimeError, ValueError) as e:
@@ -131,73 +235,106 @@ async def analyze_batch(
     Analyze multiple photos concurrently.
     If photo_ids is None, analyze all photos with status 'queued' or 'error'.
     """
-    global analysis_progress
+    global analysis_progress, _batch_active, _active_start, _active_accum
 
-    settings = await db.get_settings()
-    if engine_name is None:
-        engine_name = settings.get("engine", "claude")
-    if concurrency is None:
-        concurrency = int(settings.get("analysis_concurrency", "1"))
-
-    # For cloud engines, use sequential processing to avoid rate limits
-    is_cloud = engine_name in ("gemini", "claude")
-    if is_cloud:
-        concurrency = 1
-
-    # Get photos to analyze
-    if photo_ids is None:
-        photos, _ = await db.get_photos(limit=10000, status="queued")
-        error_photos, _ = await db.get_photos(limit=10000, status="error")
-        photos.extend(error_photos)
-        photo_ids = [p["id"] for p in photos]
-
-    if not photo_ids:
+    # Reject overlapping batches. This runs synchronously before any await, so
+    # two near-simultaneous requests cannot both pass this guard.
+    if _batch_active:
+        logger.warning("Analysis batch already active; ignoring duplicate request")
         return
+    _batch_active = True
+    # Reset pause/timing state for the new batch.
+    _pause_event.set()
+    _active_start = time.time()
+    _active_accum = 0.0
 
-    analysis_progress = {
-        "running": True,
-        "engine": engine_name,
-        "total": len(photo_ids),
-        "completed": 0,
-        "errors": 0,
-        "current_file": "",
-    }
+    try:
+        settings = await db.get_settings()
+        if engine_name is None:
+            engine_name = settings.get("engine", "claude")
+        if concurrency is None:
+            concurrency = int(settings.get("analysis_concurrency", "2"))
 
-    queue = asyncio.Queue()
-    for pid in photo_ids:
-        await queue.put(pid)
+        # For cloud engines, use sequential processing to avoid rate limits
+        is_cloud = engine_name in ("gemini", "claude")
+        if is_cloud:
+            concurrency = 1
 
-    async def worker():
-        while not queue.empty():
-            try:
-                photo_id = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        # Get photos to analyze
+        if photo_ids is None:
+            photos, _ = await db.get_photos(limit=10000, status="queued")
+            error_photos, _ = await db.get_photos(limit=10000, status="error")
+            photos.extend(error_photos)
+            photo_ids = [p["id"] for p in photos]
 
-            photo = await db.get_photo(photo_id)
-            if photo:
-                analysis_progress["current_file"] = photo["file_name"]
+        if not photo_ids:
+            return
 
-            try:
-                await analyze_single(photo_id, engine_name=engine_name)
-                analysis_progress["completed"] += 1
-                # Throttle cloud API calls (Gemini free: ~15 RPM)
-                if is_cloud:
-                    await asyncio.sleep(5)
-            except Exception as e:
-                logger.error(f"Analysis failed for photo {photo_id}: {e}")
-                analysis_progress["errors"] += 1
-                analysis_progress["completed"] += 1
+        analysis_progress = {
+            "running": True,
+            "engine": engine_name,
+            "total": len(photo_ids),
+            "completed": 0,
+            "errors": 0,
+            "current_file": "",
+            "paused": False,
+            "started_at": time.time(),
+            "elapsed_seconds": 0.0,
+            "eta_seconds": None,
+        }
 
-    workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(photo_ids)))]
-    await asyncio.gather(*workers)
+        queue = asyncio.Queue()
+        for pid in photo_ids:
+            await queue.put(pid)
 
-    analysis_progress["running"] = False
-    analysis_progress["current_file"] = ""
+        async def worker():
+            while not queue.empty():
+                # Block here while paused (takes effect before each photo).
+                await _pause_event.wait()
+                try:
+                    photo_id = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+                photo = await db.get_photo(photo_id)
+                if photo:
+                    analysis_progress["current_file"] = photo["file_name"]
+
+                try:
+                    await analyze_single(photo_id, engine_name=engine_name)
+                    analysis_progress["completed"] += 1
+                    # Throttle cloud API calls (Gemini free: ~15 RPM)
+                    if is_cloud:
+                        await asyncio.sleep(5)
+                except Exception as e:
+                    logger.error(f"Analysis failed for photo {photo_id}: {e}")
+                    analysis_progress["errors"] += 1
+                    analysis_progress["completed"] += 1
+
+        workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(photo_ids)))]
+        await asyncio.gather(*workers)
+    finally:
+        analysis_progress["running"] = False
+        analysis_progress["current_file"] = ""
+        _batch_active = False
 
 
 def get_analysis_progress() -> dict:
-    return dict(analysis_progress)
+    p = dict(analysis_progress)
+    # Active elapsed time (excludes paused spans).
+    elapsed = _active_accum
+    if _pause_event.is_set() and _active_start:
+        elapsed += time.time() - _active_start
+    p["elapsed_seconds"] = round(elapsed, 1)
+    # ETA from average time per completed photo.
+    completed = p.get("completed", 0)
+    total = p.get("total", 0)
+    if completed > 0 and total > completed and elapsed > 0:
+        per = elapsed / completed
+        p["eta_seconds"] = round(per * (total - completed), 1)
+    else:
+        p["eta_seconds"] = None
+    return p
 
 
 def _read_and_resize(file_path: str, max_size: int = 512) -> bytes:

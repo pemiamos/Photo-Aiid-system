@@ -8,7 +8,7 @@ import IndexTable from './components/IndexTable'
 import AboutPage from './components/AboutPage'
 
 export default function App() {
-  const { activeTab, error, settings } = usePhotoStore()
+  const { activeTab, error, settings, scanStatus } = usePhotoStore()
   const dispatch = usePhotoDispatch()
 
   // Track previous folder path to clear search/filters upon folder switch
@@ -28,14 +28,15 @@ export default function App() {
           dispatch({
             type: Actions.SET_SETTINGS,
             payload: {
-              engine: data.engine || 'claude',
-              apiKey: data.claude_api_key || '',
-              geminiApiKey: data.gemini_api_key || '',
+              engine: data.engine || 'ollama',
+              apiKey: data.claude_api_key_masked || '',
+              geminiApiKey: data.gemini_api_key_masked || '',
               geminiModel: data.gemini_model || 'gemini-2.5-flash',
+              zhipuApiKey: data.zhipu_api_key_masked || '',
               ollamaUrl: data.ollama_url || 'http://localhost:11434',
-              ollamaModel: data.ollama_model || 'gemma3:12b',
+              ollamaModel: data.ollama_model || 'gemma4:31b',
               prefix: data.rename_prefix || 'SDEXP',
-              template: data.rename_template || '[前缀]_[AI标签]_[日期]_[序号]',
+              template: data.rename_template || '[摄影师]_[地点]_[类别]_[日期]',
               folderPath: data.last_folder || '',
             },
           })
@@ -56,7 +57,10 @@ export default function App() {
       })
   }, [dispatch])
 
-  // Fetch photos whenever the active folder path changes
+  // Authoritatively (re)load the gallery for the active folder whenever the
+  // folder changes OR a scan finishes. The `scanStatus` dependency guarantees
+  // that, no matter how the scan polling raced, the gallery ends up showing the
+  // photos for the current folder once scanning completes.
   useEffect(() => {
     api.getPhotos({ folder_path: settings?.folderPath || '' })
       .then(data => {
@@ -67,7 +71,7 @@ export default function App() {
       .catch(() => {
         // Ignored
       })
-  }, [settings?.folderPath, dispatch])
+  }, [settings?.folderPath, scanStatus, dispatch])
 
   // Clear error after 5s
   useEffect(() => {
