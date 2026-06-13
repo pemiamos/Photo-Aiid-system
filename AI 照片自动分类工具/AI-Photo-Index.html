@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-Photo-Index · v0.4</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exifr/7.1.3/full.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root{
+    --bg:#16181c; --panel:#1d2026; --panel-2:#22262d; --line:#2d323a;
+    --text:#e8e6df; --muted:#8d929c; --faint:#5b606a;
+    --amber:#e8a33d; --amber-dim:#a06f24; --ok:#7fb069; --warn:#d96c5f;
+    --mono:ui-monospace,'SF Mono','JetBrains Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,'PingFang SC','Noto Sans CJK SC','Microsoft YaHei',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;overflow:hidden}
+
+  /* ---------- header ---------- */
+  header{height:52px;display:flex;align-items:center;gap:24px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .logo{display:flex;align-items:baseline;gap:8px}
+  .logo b{font-size:15px;letter-spacing:.02em}
+  .logo span{font-family:var(--mono);font-size:11px;color:var(--amber);border:1px solid var(--amber-dim);border-radius:3px;padding:1px 6px}
+  nav{display:flex;gap:4px;margin-left:8px}
+  nav button{background:none;border:none;color:var(--muted);font-family:var(--sans);font-size:13px;padding:6px 14px;border-radius:6px;cursor:pointer}
+  nav button:hover{color:var(--text)}
+  nav button.active{color:var(--text);background:var(--panel-2);box-shadow:inset 0 -2px 0 var(--amber)}
+  .hd-right{margin-left:auto;display:flex;align-items:center;gap:14px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);display:inline-block;margin-right:6px}
+  .dot.busy{background:var(--amber);animation:pulse 1s infinite}
+  .dot.done{background:var(--ok)}
+  @keyframes pulse{50%{opacity:.3}}
+
+  /* ---------- layout ---------- */
+  .app{display:flex;height:calc(100% - 52px)}
+  aside{width:280px;min-width:280px;border-right:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:18px 16px;display:flex;flex-direction:column;gap:22px}
+  main{flex:1;overflow-y:auto;padding:20px 24px;position:relative}
+
+  .sec h3{font-size:11px;font-weight:600;color:var(--faint);letter-spacing:.14em;text-transform:uppercase;margin-bottom:10px;font-family:var(--mono)}
+
+  /* dropzone */
+  .drop{border:1.5px dashed var(--line);border-radius:10px;padding:16px 12px;text-align:center;cursor:pointer;color:var(--muted);transition:.15s;margin-top:8px}
+  .drop:hover,.drop.over{border-color:var(--amber);color:var(--text);background:rgba(232,163,61,.04)}
+  .drop b{display:block;color:var(--text);margin-bottom:4px;font-weight:500}
+  .drop small{font-size:11px;color:var(--faint)}
+
+  label.fld{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+  input[type=text],select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:7px 9px;font-family:var(--mono);font-size:12px}
+  input[type=text]:focus{outline:none;border-color:var(--amber-dim)}
+  .hint{font-size:11px;color:var(--faint);margin-top:5px;line-height:1.5;font-family:var(--mono)}
+  .hint.good{color:var(--ok)}
+  .hint.bad{color:var(--warn)}
+
+  .btn{width:100%;border:none;border-radius:7px;padding:9px;font-size:13px;cursor:pointer;font-family:var(--sans)}
+  .btn.primary{background:var(--amber);color:#1a1408;font-weight:600}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn.ghost{background:var(--panel-2);color:var(--text);border:1px solid var(--line)}
+  .btn.ghost:hover{border-color:var(--faint)}
+  .btn.danger{background:none;border:1px solid var(--warn);color:var(--warn)}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn+.btn{margin-top:8px}
+
+  .stat{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--muted);padding:3px 0}
+  .stat b{color:var(--text);font-weight:500}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);cursor:pointer;background:none;font-family:var(--sans)}
+  .chip:hover{color:var(--text)}
+  .chip.on{border-color:var(--amber);color:var(--amber);background:rgba(232,163,61,.08)}
+
+  /* search */
+  .searchrow{display:flex;gap:8px;margin-bottom:16px}
+  .searchrow input{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:9px 12px;font-size:13px;font-family:var(--sans)}
+  .searchrow input:focus{outline:none;border-color:var(--amber-dim)}
+  .searchrow button{white-space:nowrap;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--amber);padding:0 16px;font-size:13px;cursor:pointer}
+  .searchrow button:hover{border-color:var(--amber-dim)}
+  .searchnote{font-size:12px;color:var(--muted);margin:-8px 0 14px;font-family:var(--mono)}
+
+  /* progress */
+  .progress{position:sticky;top:0;z-index:5;background:var(--bg);padding-bottom:12px;display:none}
+  .progress.show{display:block}
+  .pbar{height:3px;background:var(--panel-2);border-radius:2px;overflow:hidden}
+  .pbar i{display:block;height:100%;background:var(--amber);width:0;transition:width .3s}
+  .ptext{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:6px}
+
+  /* gallery — contact sheet */
+  .gallery{columns:4 240px;column-gap:14px}
+  .card{break-inside:avoid;margin-bottom:14px;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;position:relative}
+  .card img{width:100%;display:block;background:#000;min-height:60px}
+  .frame-edge{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:#101114;font-family:var(--mono);font-size:10px;color:var(--amber);letter-spacing:.08em;border-bottom:1px solid #000}
+  .frame-edge .perf{color:var(--faint)}
+  .card .meta{padding:9px 10px 11px}
+  .card .fname{font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card .newname{font-family:var(--mono);font-size:11px;color:var(--ok);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+  .card .newname.renamed{color:var(--amber)}
+  .card .desc{font-size:12px;color:var(--text);margin:7px 0 6px;line-height:1.5}
+  .card .tags{display:flex;flex-wrap:wrap;gap:5px}
+  .card .tag{font-size:10px;padding:2px 7px;border-radius:99px;background:var(--panel-2);color:var(--muted);border:1px solid var(--line)}
+  .card .exifline{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:7px;line-height:1.6}
+  .card .status{position:absolute;top:30px;right:8px;font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(0,0,0,.65);backdrop-filter:blur(4px)}
+  .status.queued{color:var(--muted)} .status.working{color:var(--amber)} .status.error{color:var(--warn);cursor:pointer} .status.cached{color:var(--ok)}
+
+  /* table */
+  .tablewrap{border:1px solid var(--line);border-radius:8px;overflow:auto;background:var(--panel)}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel)}
+  td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--muted)}
+  td.mono{font-family:var(--mono);font-size:11px}
+  td .nn{color:var(--ok);font-family:var(--mono);font-size:11px}
+  td .nn.renamed{color:var(--amber)}
+  tr:hover td{background:var(--panel-2)}
+  .tbl-actions{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .tbl-actions .btn{width:auto;padding:8px 18px}
+  .tbl-note{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:12px}
+
+  /* about */
+  .about{max-width:680px;line-height:1.8;color:var(--muted)}
+  .about h2{color:var(--text);font-size:16px;margin:22px 0 8px}
+  .about code{font-family:var(--mono);font-size:12px;color:var(--amber);background:var(--panel);padding:1px 6px;border-radius:4px}
+  .about ul{padding-left:20px}
+  .empty{text-align:center;color:var(--faint);padding:80px 0;font-family:var(--mono);font-size:12px;line-height:2}
+  .empty b{color:var(--muted);font-size:14px;display:block;font-family:var(--sans)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><b>AI-Photo-Index</b><span>v0.4</span></div>
+  <nav>
+    <button class="active" data-tab="gallery">画廊</button>
+    <button data-tab="index">索引表</button>
+    <button data-tab="about">说明</button>
+  </nav>
+  <div class="hd-right">
+    <span id="folderBadge" style="display:none">📁 <span id="folderName"></span></span>
+    <span><i class="dot" id="engineDot"></i><span id="engineText">引擎待命</span></span>
+  </div>
+</header>
+
+<div class="app">
+  <aside>
+    <div class="sec">
+      <h3>链接照片</h3>
+      <button class="btn primary" id="btnMount">挂载文件夹（可物理重命名）</button>
+      <button class="btn ghost" id="btnRestore" style="display:none">恢复上次挂载</button>
+      <div class="drop" id="drop">
+        <b>或拖入照片 / 点击选择</b>
+        <small>非侵入 · 不复制不上传，仅建立索引</small>
+      </div>
+      <input type="file" id="filePick" accept="image/*,.heic,.heif" multiple hidden>
+      <div class="hint" id="mountInfo"></div>
+    </div>
+
+    <div class="sec">
+      <h3>识别引擎</h3>
+      <select id="engine">
+        <option value="claude">Claude API</option>
+        <option value="ollama">Ollama 本地</option>
+      </select>
+      <div id="claudeCfg">
+        <label class="fld">API Key</label>
+        <input type="text" id="apiKey" placeholder="sk-ant-…">
+        <div class="hint">本地打开时必填（console.anthropic.com 获取，仅存于本机浏览器）；在 claude.ai Artifact 内可留空</div>
+      </div>
+      <div id="ollamaCfg" style="display:none">
+        <label class="fld">Endpoint</label>
+        <input type="text" id="olUrl" value="http://localhost:11434">
+        <label class="fld">视觉模型</label>
+        <input type="text" id="olModel" value="gemma4:31b">
+        <div class="hint">需先允许浏览器跨域访问 Ollama：<br>launchctl setenv OLLAMA_ORIGINS "*"<br>然后重启 Ollama 服务</div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <h3>重命名模板</h3>
+      <label class="fld">前缀</label>
+      <input type="text" id="prefix" value="SDEXP">
+      <label class="fld">模板</label>
+      <input type="text" id="tpl" value="[前缀]_[AI标签]_[日期]_[序号]">
+      <div class="hint">占位符：[前缀] [AI标签] [日期] [序号]<br>重名自动加 -2/-3 后缀</div>
+    </div>
+
+    <div class="sec">
+      <h3>标签过滤</h3>
+      <div class="chips" id="tagChips"><span class="hint">分析完成后出现</span></div>
+    </div>
+
+    <div class="sec">
+      <h3>库统计</h3>
+      <div class="stat"><span>照片</span><b id="stTotal">0</b></div>
+      <div class="stat"><span>已分析</span><b id="stDone">0</b></div>
+      <div class="stat"><span>命中缓存</span><b id="stCached">0</b></div>
+      <div class="stat"><span>标签数</span><b id="stTags">0</b></div>
+      <div class="stat"><span>已重命名</span><b id="stRenamed">0</b></div>
+    </div>
+
+    <div class="sec">
+      <button class="btn primary" id="btnAnalyze" disabled>开始 AI 分析</button>
+      <button class="btn ghost" id="btnClear" disabled>清空</button>
+      <button class="btn ghost" id="btnTest">测试 AI 连接</button>
+      <div class="hint" id="testResult"></div>
+    </div>
+  </aside>
+
+  <main>
+    <!-- 画廊 -->
+    <section id="tab-gallery">
+      <div class="searchrow">
+        <input type="text" id="q" placeholder="搜索：输入关键词即时过滤，或用自然语言描述后点「语义搜索」，如：山里拍的有水的风景">
+        <button id="btnSemantic">语义搜索</button>
+      </div>
+      <div class="searchnote" id="searchNote" style="display:none"></div>
+      <div class="progress" id="prog">
+        <div class="ptext" id="progText"></div>
+        <div class="pbar"><i id="progBar"></i></div>
+      </div>
+      <div class="gallery" id="gallery"></div>
+      <div class="empty" id="emptyState">
+        <b>暗房已就绪</b>
+        挂载文件夹或拖入照片，AI 将自动识别内容、提取 EXIF、生成标签与建议文件名
+      </div>
+    </section>
+
+    <!-- 索引表 -->
+    <section id="tab-index" style="display:none">
+      <div class="tbl-actions">
+        <button class="btn danger" id="btnRename" disabled>⚡ 执行物理重命名</button>
+        <button class="btn primary" id="btnCSV">导出索引 CSV</button>
+        <button class="btn ghost" id="btnZip">下载重命名副本 (ZIP)</button>
+      </div>
+      <div class="tbl-note" id="renameNote"></div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th style="width:46px">帧号</th><th>原文件名</th><th>AI 标签</th><th>拍摄日期</th><th>器材</th><th>建议新名</th>
+          </tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 说明 -->
+    <section id="tab-about" style="display:none">
+      <div class="about">
+        <h2>v0.4 — 这一版能做什么</h2>
+        <p>对应规格书 (Project: AI-Photo-Index) V1.0 完整闭环：<b>挂载文件夹 → AI 自动打标 → EXIF 提取 → 动态索引表 → 模板化「物理」批量重命名 → CSV 导出</b>。整理成果沉淀在文件名本身，不依赖软件存在。</p>
+        <h2>相比 v0.3 Demo 的升级</h2>
+        <ul>
+          <li><b>挂载文件夹：</b>通过 File System Access API 非侵入式挂载本地文件夹（含子目录递归扫描），不复制、不上传。</li>
+          <li><b>真·物理重命名：</b>挂载模式下可直接改写磁盘上的文件名（Chrome / Edge）。执行后自动下载重命名日志 CSV（旧名 → 新名），可追溯。拖入的散图仍走 ZIP 副本。</li>
+          <li><b>分析缓存：</b>AI 结果按「路径+大小+修改时间」存入 IndexedDB，刷新页面、重新挂载同一文件夹时秒级恢复，不重复花费推理。</li>
+          <li><b>恢复挂载：</b>记住上次挂载的文件夹，下次打开一键恢复（需重新授权）。</li>
+          <li><b>修复：</b>序号在过滤视图下保持稳定；新文件名重名自动去重；语义搜索分批发送（大库不爆 token）；文件名/AI 输出统一转义。</li>
+        </ul>
+        <h2>引擎与环境要求</h2>
+        <ul>
+          <li><b>物理重命名 / 挂载</b>需要 Chrome 或 Edge（Safari、Firefox 不支持 File System Access API，自动回退到拖入 + ZIP 模式）。</li>
+          <li><b>Claude 引擎：</b>本地用 Chrome 打开时需填写 API Key（console.anthropic.com 获取，仅存于本机浏览器 localStorage）；在 claude.ai Artifact 内可留空走免 Key 桥接，但 Artifact 内无法使用文件夹挂载与物理重命名。</li>
+          <li><b>Ollama 引擎：</b>本地推理，符合「零云端」原则。终端执行 <code>launchctl setenv OLLAMA_ORIGINS "*"</code> 后重启 Ollama；模型需支持视觉（gemma3 / llava / qwen-vl 系列）。</li>
+        </ul>
+        <h2>与正式版的剩余差距</h2>
+        <ul>
+          <li>语义搜索仍是「标签索引 + LLM 匹配」，正式版应迁移到本地向量库 embedding 检索。</li>
+          <li>影子目录（虚拟分类的物理导出）、人脸聚类、OCR 入索引在后续版本。</li>
+          <li>识别引擎正式版按规格迁移至 ONNX Runtime + CLIP，彻底脱离外部依赖。</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+/* ============ state ============ */
+let photos = [];          // {id, name, relpath, file, handle, parent, url, thumb, exif, ai, status, renamed, cached}
+let nextId = 1;
+let activeTag = null;
+let semanticIds = null;   // null = off; array = AI search result
+let running = false;
+let dirHandle = null;     // mounted root
+let nameMap = new Map();  // photo.id -> deduped new name (recomputed each refresh)
+
+const $ = id => document.getElementById(id);
+const gallery=$('gallery'), tbody=$('tbody');
+const FS_OK = 'showDirectoryPicker' in window;
+const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ============ IndexedDB cache ============ */
+const idb = {
+  db: null,
+  open(){
+    if(this.db) return Promise.resolve(this.db);
+    return new Promise((res,rej)=>{
+      const r = indexedDB.open('ai-photo-index', 1);
+      r.onupgradeneeded = ()=>{ r.result.createObjectStore('ai'); r.result.createObjectStore('kv'); };
+      r.onsuccess = ()=>{ this.db = r.result; res(this.db); };
+      r.onerror = ()=>rej(r.error);
+    });
+  },
+  async get(store,key){
+    try{
+      const db = await this.open();
+      return await new Promise((res,rej)=>{
+        const q = db.transaction(store).objectStore(store).get(key);
+        q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error);
+      });
+    }catch(e){ return undefined; }
+  },
+  async put(store,key,val){
+    try{
+      const db = await this.open();
+      return await new Promise((res,rej)=>{
+        const q = db.transaction(store,'readwrite').objectStore(store).put(val,key);
+        q.onsuccess=()=>res(); q.onerror=()=>rej(q.error);
+      });
+    }catch(e){}
+  },
+  async del(store,key){
+    try{
+      const db = await this.open();
+      return await new Promise((res)=>{
+        const q = db.transaction(store,'readwrite').objectStore(store).delete(key);
+        q.onsuccess=()=>res(); q.onerror=()=>res();
+      });
+    }catch(e){}
+  }
+};
+const cacheKey = p => (p.relpath||p.name)+'|'+p.file.size+'|'+p.file.lastModified;
+
+async function cachePut(p){
+  if(!p.ai) return;
+  await idb.put('ai', cacheKey(p), {ai:p.ai, savedAt:Date.now()});
+}
+async function cacheLookup(p){
+  const hit = await idb.get('ai', cacheKey(p));
+  if(hit && hit.ai){ p.ai = hit.ai; p.status='done'; p.cached = true; }
+}
+
+/* ============ tabs ============ */
+document.querySelectorAll('nav button').forEach(b=>{
+  b.onclick=()=>{
+    document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    ['gallery','index','about'].forEach(t=>$('tab-'+t).style.display = t===b.dataset.tab?'':'none');
+  };
+});
+
+/* ============ folder mount (File System Access API) ============ */
+if(!FS_OK){
+  $('btnMount').style.display='none';
+  $('mountInfo').textContent='当前浏览器不支持文件夹挂载与物理重命名（需 Chrome/Edge），可拖入照片使用 ZIP 副本模式';
+}
+
+$('btnMount').onclick = async ()=>{
+  try{
+    const h = await showDirectoryPicker({mode:'readwrite'});
+    await mountDir(h);
+    await idb.put('kv','lastDir',h);
+  }catch(e){ if(e.name!=='AbortError') $('mountInfo').textContent='挂载失败：'+e.message; }
+};
+
+async function initRestore(){
+  if(!FS_OK) return;
+  const h = await idb.get('kv','lastDir');
+  if(h){ $('btnRestore').style.display=''; $('btnRestore').textContent='恢复上次挂载：'+h.name; }
+}
+$('btnRestore').onclick = async ()=>{
+  const h = await idb.get('kv','lastDir');
+  if(!h) return;
+  try{
+    let perm = await h.queryPermission({mode:'readwrite'});
+    if(perm!=='granted') perm = await h.requestPermission({mode:'readwrite'});
+    if(perm!=='granted'){ $('mountInfo').textContent='未授权，无法恢复挂载'; return; }
+    await mountDir(h);
+  }catch(e){ $('mountInfo').textContent='恢复失败：'+e.message; }
+};
+
+const IMG_RE = /\.(jpe?g|png|gif|webp|heic|heif|bmp|tiff?)$/i;
+const MAX_FILES = 2000;
+
+async function mountDir(h){
+  dirHandle = h;
+  $('folderBadge').style.display=''; $('folderName').textContent=h.name;
+  $('prog').classList.add('show'); $('progText').textContent='扫描文件夹…'; $('progBar').style.width='0%';
+  const found = [];
+  await scanDir(h, '', found);
+  $('mountInfo').textContent = `已挂载「${h.name}」· 发现 ${found.length} 张图片`+(found.length>=MAX_FILES?'（已达上限 '+MAX_FILES+'）':'');
+  let i=0, cachedN=0;
+  for(const it of found){
+    if(photos.some(p=>p.relpath===it.relpath && p.file.size===it.file.size)) { i++; continue; }
+    const p = {id:nextId++, seq:nextId-1, name:it.file.name, relpath:it.relpath, file:it.file,
+               handle:it.handle, parent:it.parent, url:URL.createObjectURL(it.file),
+               thumb:null, exif:{}, ai:null, status:'queued', renamed:false, cached:false};
+    photos.push(p);
+    await cacheLookup(p);
+    if(p.cached) cachedN++;
+    readExif(p); makeThumb(p);
+    i++;
+    if(i%20===0){ $('progText').textContent=`载入 ${i}/${found.length}（缓存命中 ${cachedN}）`; $('progBar').style.width=(i/found.length*100)+'%'; await new Promise(r=>setTimeout(r)); }
+  }
+  setTimeout(()=>$('prog').classList.remove('show'),800);
+  refresh();
+}
+
+async function scanDir(dh, prefix, out){
+  if(out.length>=MAX_FILES) return;
+  for await (const entry of dh.values()){
+    if(out.length>=MAX_FILES) return;
+    if(entry.kind==='file' && IMG_RE.test(entry.name)){
+      try{ out.push({handle:entry, parent:dh, relpath:prefix+entry.name, file:await entry.getFile()}); }catch(e){}
+    }else if(entry.kind==='directory' && !entry.name.startsWith('.')){
+      await scanDir(entry, prefix+entry.name+'/', out);
+    }
+  }
+}
+
+/* ============ loose file intake (drag / pick) ============ */
+const drop=$('drop'), filePick=$('filePick');
+drop.onclick=()=>filePick.click();
+filePick.onchange=e=>addFiles(e.target.files);
+['dragover','dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{
+  e.preventDefault();
+  drop.classList.toggle('over', ev==='dragover');
+  if(ev==='drop') addFiles(e.dataTransfer.files);
+}));
+document.body.addEventListener('dragover',e=>e.preventDefault());
+document.body.addEventListener('drop',e=>{e.preventDefault();addFiles(e.dataTransfer.files);});
+
+async function addFiles(list){
+  const imgs=[...list].filter(f=>f.type.startsWith('image/')||IMG_RE.test(f.name));
+  for(const f of imgs){
+    const p={id:nextId++, seq:nextId-1, name:f.name, relpath:null, file:f, handle:null, parent:null,
+             url:URL.createObjectURL(f), thumb:null, exif:{}, ai:null, status:'queued', renamed:false, cached:false};
+    photos.push(p);
+    await cacheLookup(p);
+    readExif(p); makeThumb(p);
+  }
+  refresh();
+}
+
+/* ============ EXIF ============ */
+async function readExif(p){
+  try{
+    if(window.exifr){
+      const x = await exifr.parse(p.file, ['DateTimeOriginal','CreateDate','Model','LensModel','FNumber','ISO','FocalLength','ExposureTime','latitude','longitude']);
+      if(x){
+        p.exif = {
+          date: x.DateTimeOriginal || x.CreateDate || null,
+          model: x.Model||'', lens: x.LensModel||'',
+          f: x.FNumber? 'f/'+x.FNumber : '', iso: x.ISO? 'ISO'+x.ISO:'',
+          fl: x.FocalLength? Math.round(x.FocalLength)+'mm':'',
+          gps: (x.latitude!=null)? x.latitude.toFixed(4)+','+x.longitude.toFixed(4):''
+        };
+      }
+    }
+  }catch(e){}
+  if(!p.exif.date) p.exif.date = new Date(p.file.lastModified);
+  refresh();
+}
+
+/* ============ thumbnails ============ */
+function loadImageEl(url){
+  return new Promise((res,rej)=>{
+    const i=new Image();
+    i.onload=()=>res(i);
+    i.onerror=()=>rej(new Error('图片解码失败（可能是 HEIC 等浏览器不支持的格式）'));
+    i.src=url;
+  });
+}
+// 解码 + 压缩，结果同时用于缩略图显示和 AI 推理（所见即所发）
+async function makeThumb(p, max=512){
+  let src;
+  try{ src = await loadImageEl(p.url); }
+  catch(e1){
+    try{ src = await createImageBitmap(p.file); }
+    catch(e2){ p.decodeError = e1.message; refresh(); return; }
+  }
+  const w = src.naturalWidth||src.width, h = src.naturalHeight||src.height;
+  if(!w||!h){ p.decodeError='图片尺寸为 0，解码异常'; refresh(); return; }
+  const s = Math.min(1, max/Math.max(w,h));
+  const c = document.createElement('canvas');
+  c.width=Math.max(1,Math.round(w*s)); c.height=Math.max(1,Math.round(h*s));
+  c.getContext('2d').drawImage(src,0,0,c.width,c.height);
+  p.thumb = c.toDataURL('image/jpeg',0.72);
+  refresh();
+}
+
+/* ============ engines ============ */
+async function callClaude(body){
+  const headers = {'Content-Type':'application/json'};
+  const key = $('apiKey').value.trim();
+  if(key){
+    headers['x-api-key'] = key;
+    headers['anthropic-version'] = '2023-06-01';
+    headers['anthropic-dangerous-direct-browser-access'] = 'true';
+  }
+  let r;
+  try{
+    r = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST', headers,
+      body:JSON.stringify(Object.assign({model:'claude-sonnet-4-6', max_tokens:1000}, body))
+    });
+  }catch(e){
+    throw new Error(key
+      ? '无法连接 Claude API（'+e.message+'）。请检查网络'
+      : '免 Key 模式仅在 claude.ai Artifact 内可用。本地打开请填写 API Key，或切换 Ollama 引擎');
+  }
+  const raw = await r.text();
+  let data;
+  try{ data = JSON.parse(raw); }
+  catch(e){ throw new Error(`HTTP ${r.status} · 非JSON响应: ${raw.slice(0,140)}`); }
+  if(data.error){
+    const msg = typeof data.error==='string' ? data.error : (data.error.message || JSON.stringify(data.error));
+    throw new Error(`HTTP ${r.status} · ${String(msg).slice(0,140)}`);
+  }
+  if(!Array.isArray(data.content)) throw new Error(`响应缺少 content 字段: ${raw.slice(0,140)}`);
+  return data.content.filter(i=>i.type==='text').map(i=>i.text).join('');
+}
+
+async function callOllama(prompt, imageB64){
+  const url = $('olUrl').value.trim().replace(/\/$/,'') + '/api/chat';
+  const msg = {role:'user', content: prompt};
+  if(imageB64) msg.images = [imageB64];
+  let r;
+  try{
+    r = await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({model: $('olModel').value.trim(), messages:[msg], stream:false})});
+  }catch(e){
+    throw new Error('无法连接 Ollama（'+e.message+'）。请确认服务已启动，且已设置 OLLAMA_ORIGINS="*" 并重启');
+  }
+  const raw = await r.text();
+  let data;
+  try{ data = JSON.parse(raw); }
+  catch(e){ throw new Error(`HTTP ${r.status} · ${raw.slice(0,140)}`); }
+  if(data.error) throw new Error(String(data.error).slice(0,140));
+  return data.message?.content || '';
+}
+
+// 统一引擎入口：prompt 必填，imageB64 可选
+function callEngine(prompt, imageB64){
+  if($('engine').value === 'ollama') return callOllama(prompt, imageB64);
+  const content = imageB64
+    ? [{type:'image',source:{type:'base64',media_type:'image/jpeg',data:imageB64}},{type:'text',text:prompt}]
+    : prompt;
+  return callClaude({messages:[{role:'user',content}]});
+}
+
+$('engine').onchange = ()=>{
+  $('ollamaCfg').style.display = $('engine').value==='ollama' ? '' : 'none';
+  $('claudeCfg').style.display = $('engine').value==='claude' ? '' : 'none';
+  $('testResult').innerHTML='';
+  saveSettings();
+};
+
+/* ============ settings persistence ============ */
+function saveSettings(){
+  try{ localStorage.setItem('apidx-settings', JSON.stringify({
+    engine:$('engine').value, olUrl:$('olUrl').value, olModel:$('olModel').value,
+    apiKey:$('apiKey').value, prefix:$('prefix').value, tpl:$('tpl').value })); }catch(e){}
+}
+function loadSettings(){
+  try{
+    const s = JSON.parse(localStorage.getItem('apidx-settings')||'{}');
+    if(s.engine){ $('engine').value=s.engine;
+      $('ollamaCfg').style.display = s.engine==='ollama'?'':'none';
+      $('claudeCfg').style.display = s.engine==='claude'?'':'none'; }
+    if(s.apiKey) $('apiKey').value=s.apiKey;
+    if(s.olUrl) $('olUrl').value=s.olUrl;
+    if(s.olModel) $('olModel').value=s.olModel;
+    if(s.prefix!=null) $('prefix').value=s.prefix;
+    if(s.tpl) $('tpl').value=s.tpl;
+  }catch(e){}
+}
+['olUrl','olModel','apiKey'].forEach(id=>$(id).onchange=saveSettings);
+
+/* ============ AI analysis ============ */
+const TAG_PROMPT = `Analyze this photo for a photo-indexing app. Reason in English internally for accuracy, then output Chinese labels.
+You are also given the file's name and the folder path it lives in. These often carry human-authored context (event, place, date, project, client, subject). Treat them as strong hints: cross-check them against what you actually see in the image. When the filename/folder names a specific place, person, event or theme that is consistent with the image, fold that into the category/tags/description; if they clearly contradict the image, trust the image and ignore the misleading name.
+Respond with ONLY a JSON object, no markdown fences, no preamble:
+{"category":"主类别(2-4个汉字，如：自然风光/人像/美食/文档/宠物/建筑/街拍)","tags":["3到6个中文标签，可包含从文件名/文件夹推断出的地点/事件/项目等信息"],"desc":"一句不超过20字的中文画面描述","slug":"short-english-slug-for-filename"}`;
+
+// 从文件名与所在文件夹构造上下文文本，供 AI 提取信息
+function nameContext(p){
+  const rel = p.relpath || p.name;
+  const parts = rel.split('/');
+  const fname = parts.pop();
+  const folder = parts.join('/') || (dirHandle ? dirHandle.name : '(根目录/散图)');
+  return `文件名：${fname}\n所在文件夹：${folder}`;
+}
+
+async function analyzeOne(p){
+  if(p.decodeError){ p.status='error'; p.aiError=p.decodeError; refresh(); return; }
+  p.status='working'; p.aiError=null; refresh();
+  try{
+    if(!p.thumb) await makeThumb(p);
+    if(!p.thumb) throw new Error(p.decodeError||'缩略图生成失败');
+    const prompt = TAG_PROMPT + '\n\n--- 文件上下文（请结合图像与下列信息综合判断）---\n' + nameContext(p);
+    const text = await callEngine(prompt, p.thumb.split(',')[1]);
+    const m = text.match(/\{[\s\S]*\}/);
+    p.ai = JSON.parse((m?m[0]:text).replace(/```json|```/g,'').trim());
+    p.status='done';
+    cachePut(p);
+  }catch(e){
+    console.error('photo',p.id,e); p.status='error'; p.aiError=e.message;
+  }
+  refresh();
+}
+
+$('btnAnalyze').onclick = async ()=>{
+  if(running) return; running=true;
+  setEngine('busy');
+  const queue = photos.filter(p=>p.status==='queued'||p.status==='error');
+  let done=0;
+  $('prog').classList.add('show');
+  const tick=()=>{ $('progText').textContent=`AI 分析中 ${done}/${queue.length}`; $('progBar').style.width=(queue.length?done/queue.length*100:0)+'%'; };
+  tick();
+  // concurrency = 2
+  const workers = Array.from({length:2}, async ()=>{
+    while(queue.length){ const p=queue.shift(); await analyzeOne(p); done++; tick(); }
+  });
+  await Promise.all(workers);
+  setTimeout(()=>$('prog').classList.remove('show'),1200);
+  setEngine('done');
+  running=false; refresh();
+};
+
+$('btnClear').onclick=()=>{
+  photos.forEach(p=>URL.revokeObjectURL(p.url));
+  photos=[]; nextId=1; activeTag=null; semanticIds=null; dirHandle=null;
+  $('q').value=''; $('searchNote').style.display='none';
+  $('folderBadge').style.display='none'; $('mountInfo').textContent='';
+  setEngine('idle'); refresh();
+};
+
+function setEngine(s){
+  const d=$('engineDot'),t=$('engineText');
+  d.className='dot'+(s==='busy'?' busy':s==='done'?' done':'');
+  t.textContent = s==='busy'?'分析中':s==='done'?'分析完成':'引擎待命';
+}
+
+/* ============ naming ============ */
+function fmtDate(d){ if(!d) return '未知'; d=new Date(d);
+  return d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0'); }
+function fmtDateHuman(d){ if(!d) return '—'; d=new Date(d);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function ext(name){ const m=name.match(/\.[^.]+$/); return m?m[0]:'.jpg'; }
+const sanitize = s => String(s).replace(/[\\/:*?"<>|\x00-\x1f]/g,'_').trim();
+
+// 集中计算所有新名：序号用 p.seq（稳定，不随过滤变化），重名自动 -2/-3
+function computeNames(){
+  nameMap = new Map();
+  const used = new Set();
+  const tpl=$('tpl').value||'[前缀]_[AI标签]_[日期]_[序号]';
+  for(const p of photos){
+    if(!p.ai) continue;
+    if(p.renamed){ nameMap.set(p.id, p.name); used.add(p.name.toLowerCase()); continue; }
+    const base = sanitize(tpl
+      .replace('[前缀]',$('prefix').value||'IMG')
+      .replace('[AI标签]',p.ai.category||'未分类')
+      .replace('[日期]',fmtDate(p.exif.date))
+      .replace('[序号]',String(p.seq).padStart(3,'0')));
+    const e = ext(p.name);
+    let nn = base+e, n=2;
+    while(used.has(nn.toLowerCase())) nn = base+'-'+(n++)+e;
+    used.add(nn.toLowerCase());
+    nameMap.set(p.id, nn);
+  }
+}
+$('tpl').oninput = $('prefix').oninput = ()=>{ saveSettings(); refresh(); };
+
+/* ============ physical rename ============ */
+async function renameHandle(p, nn){
+  if(typeof p.handle.move === 'function'){
+    await p.handle.move(nn);
+  }else{
+    // fallback: copy + delete
+    const data = await p.handle.getFile();
+    const fh = await p.parent.getFileHandle(nn, {create:true});
+    const w = await fh.createWritable();
+    await w.write(data); await w.close();
+    await p.parent.removeEntry(p.name);
+    p.handle = fh;
+  }
+}
+
+$('btnRename').onclick = async ()=>{
+  const targets = photos.filter(p=>p.ai && p.handle && !p.renamed && nameMap.get(p.id) && nameMap.get(p.id)!==p.name);
+  if(!targets.length) return;
+  if(!confirm(`将物理重命名磁盘上的 ${targets.length} 个文件（原文件名不可自动恢复，但会下载重命名日志）。\n\n确定执行？`)) return;
+  const log=[['相对路径','原文件名','新文件名','结果']];
+  let ok=0, fail=0;
+  $('prog').classList.add('show');
+  for(let i=0;i<targets.length;i++){
+    const p=targets[i], nn=nameMap.get(p.id), oldName=p.name, oldKey=cacheKey(p);
+    $('progText').textContent=`重命名 ${i+1}/${targets.length}`; $('progBar').style.width=((i+1)/targets.length*100)+'%';
+    try{
+      await renameHandle(p, nn);
+      p.name = nn; p.renamed = true;
+      if(p.relpath) p.relpath = p.relpath.slice(0, p.relpath.length-oldName.length)+nn;
+      // 缓存迁移到新 key
+      const hit = await idb.get('ai', oldKey);
+      if(hit){ await idb.put('ai', cacheKey(p), hit); await idb.del('ai', oldKey); }
+      log.push([p.relpath||'', oldName, nn, 'OK']); ok++;
+    }catch(e){
+      log.push([p.relpath||'', oldName, nn, '失败: '+e.message]); fail++;
+      console.error('rename', oldName, e);
+    }
+    await new Promise(r=>setTimeout(r));
+  }
+  setTimeout(()=>$('prog').classList.remove('show'),800);
+  const csv='\uFEFF'+log.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+  dl(new Blob([csv],{type:'text/csv'}),'rename-log-'+fmtDate(new Date())+'.csv');
+  $('renameNote').textContent=`物理重命名完成：成功 ${ok}，失败 ${fail}。日志已下载。`;
+  refresh();
+};
+
+/* ============ connection self-test ============ */
+$('btnTest').onclick = async ()=>{
+  const out=$('testResult'); out.innerHTML='测试中…';
+  const eng = $('engine').value==='ollama'?'Ollama':'Claude API';
+  const lines=[`引擎：${eng}`];
+  // 1. 纯文本请求
+  try{
+    await callEngine('回复一个字：通');
+    lines.push('✓ 文本请求正常');
+  }catch(e){ lines.push('✗ 文本请求失败：'+esc(e.message)); }
+  // 2. 带图请求（8×8 像素）
+  try{
+    const c=document.createElement('canvas'); c.width=c.height=8;
+    const ctx=c.getContext('2d'); ctx.fillStyle='#e8a33d'; ctx.fillRect(0,0,8,8);
+    const b64=c.toDataURL('image/jpeg',0.8).split(',')[1];
+    await callEngine('回复一个字：图', b64);
+    lines.push('✓ 图像请求正常');
+  }catch(e){ lines.push('✗ 图像请求失败：'+esc(e.message)); }
+  out.innerHTML=lines.join('<br>');
+};
+
+/* ============ search ============ */
+$('q').oninput=()=>{ semanticIds=null; $('searchNote').style.display='none'; refresh(); };
+$('btnSemantic').onclick = async ()=>{
+  const q=$('q').value.trim();
+  const indexed = photos.filter(p=>p.ai);
+  if(!q || !indexed.length) return;
+  $('btnSemantic').textContent='搜索中…';
+  try{
+    // 分批：每批最多 150 条索引，避免大库爆 token
+    const BATCH=150, hits=[];
+    for(let i=0;i<indexed.length;i+=BATCH){
+      const compact = indexed.slice(i,i+BATCH).map(p=>({id:p.id, t:[p.ai.category,...(p.ai.tags||[])].join('/'), d:p.ai.desc}));
+      const text = await callEngine(
+`照片索引：${JSON.stringify(compact)}
+用户的自然语言搜索："${q}"
+返回语义上匹配的照片 id 数组，按相关度排序。只输出 JSON 数组如 [3,1]，无其他内容。没有匹配则输出 []。`);
+      const m = text.match(/\[[\d,\s]*\]/);
+      hits.push(...JSON.parse(m?m[0]:text.replace(/```json|```/g,'').trim()));
+    }
+    semanticIds = [...new Set(hits)];
+    const n=$('searchNote'); n.style.display='';
+    n.textContent = semanticIds.length? `语义搜索 → 命中 ${semanticIds.length} 张`:'语义搜索 → 无匹配，试试换种描述';
+  }catch(e){
+    console.error(e);
+    const n=$('searchNote'); n.style.display='';
+    n.textContent='语义搜索失败：'+e.message;
+  }
+  $('btnSemantic').textContent='语义搜索';
+  refresh();
+};
+
+/* ============ render ============ */
+function visible(){
+  let list=[...photos];
+  if(semanticIds){ list = semanticIds.map(id=>photos.find(p=>p.id===id)).filter(Boolean); return list; }
+  const q=$('q').value.trim().toLowerCase();
+  if(q) list=list.filter(p=>{
+    const hay=[p.name, p.relpath, p.ai?.category, p.ai?.desc, ...(p.ai?.tags||[])].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  if(activeTag) list=list.filter(p=>p.ai && (p.ai.category===activeTag || (p.ai.tags||[]).includes(activeTag)));
+  return list;
+}
+
+function refresh(){
+  computeNames();
+  const list=visible();
+  $('emptyState').style.display = photos.length? 'none':'';
+  $('btnAnalyze').disabled = !photos.some(p=>p.status==='queued'||p.status==='error') || running;
+  $('btnClear').disabled = !photos.length;
+
+  // stats
+  $('stTotal').textContent=photos.length;
+  $('stDone').textContent=photos.filter(p=>p.status==='done').length;
+  $('stCached').textContent=photos.filter(p=>p.cached).length;
+  $('stRenamed').textContent=photos.filter(p=>p.renamed).length;
+  const allTags=new Set(); photos.forEach(p=>{ if(p.ai){allTags.add(p.ai.category);(p.ai.tags||[]).forEach(t=>allTags.add(t));} });
+  $('stTags').textContent=allTags.size;
+
+  // rename button
+  const renameable = photos.filter(p=>p.ai && p.handle && !p.renamed && nameMap.get(p.id)!==p.name);
+  $('btnRename').disabled = !renameable.length;
+  $('btnRename').textContent = renameable.length? `⚡ 执行物理重命名（${renameable.length} 个文件）`:'⚡ 执行物理重命名';
+  if(!$('renameNote').textContent || renameable.length){
+    $('renameNote').textContent = FS_OK
+      ? (dirHandle? (renameable.length? '将直接改写磁盘文件名，执行前请确认建议新名。拖入的散图不参与，走 ZIP 副本。':'挂载文件夹并完成 AI 分析后，可在此执行物理重命名。')
+                  : '物理重命名需先「挂载文件夹」。拖入的散图只能下载 ZIP 副本。')
+      : '当前浏览器不支持物理重命名（需 Chrome/Edge），请使用 ZIP 副本。';
+  }
+
+  // chips
+  const chips=$('tagChips');
+  if(allTags.size){
+    chips.innerHTML='';
+    [...allTags].slice(0,24).forEach(t=>{
+      const b=document.createElement('button');
+      b.className='chip'+(t===activeTag?' on':''); b.textContent=t;
+      b.onclick=()=>{activeTag = activeTag===t?null:t; semanticIds=null; refresh();};
+      chips.appendChild(b);
+    });
+  } else chips.innerHTML='<span class="hint">分析完成后出现</span>';
+
+  // gallery
+  gallery.innerHTML='';
+  list.forEach((p)=>{
+    const card=document.createElement('div'); card.className='card';
+    const frame='SDX-'+String(p.id).padStart(3,'0')+'A';
+    const ex=p.exif, exifLine=[ex.model,ex.fl,ex.f,ex.iso].filter(Boolean).join(' · ');
+    const nn = nameMap.get(p.id);
+    card.innerHTML=`
+      <div class="frame-edge"><span>${frame}</span><span class="perf">▸▸▸▸▸▸▸▸</span><span>${fmtDate(ex.date)}</span></div>
+      <img src="${p.thumb||p.url}" loading="lazy">
+      ${p.status!=='done'?`<span class="status ${p.status}" data-retry="${p.id}">${{queued:'待分析',working:'识别中…',error:'失败·点此重试'}[p.status]||''}</span>`
+        : (p.cached?`<span class="status cached">缓存</span>`:'')}
+      <div class="meta">
+        <div class="fname" title="${esc(p.relpath||p.name)}">${esc(p.name)}</div>
+        ${p.decodeError?`<div class="desc" style="color:var(--warn)">⚠ ${esc(p.decodeError)}</div>`:''}
+        ${p.aiError&&!p.decodeError?`<div class="desc" style="color:var(--warn);font-family:var(--mono);font-size:10px;word-break:break-all">⚠ ${esc(p.aiError)}</div>`:''}
+        ${p.ai?`
+          ${p.renamed?`<div class="newname renamed">✓ 已重命名</div>`:`<div class="newname">→ ${esc(nn||'')}</div>`}
+          <div class="desc">${esc(p.ai.desc||'')}</div>
+          <div class="tags">${[p.ai.category,...(p.ai.tags||[])].map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>`:''}
+        ${exifLine?`<div class="exifline">${esc(exifLine)}${ex.gps?'<br>GPS '+esc(ex.gps):''}</div>`:''}
+      </div>`;
+    const st=card.querySelector('[data-retry]');
+    if(st && p.status==='error') st.onclick=()=>analyzeOne(p);
+    gallery.appendChild(card);
+  });
+
+  // table
+  tbody.innerHTML='';
+  list.forEach(p=>{
+    const nn = nameMap.get(p.id);
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td class="mono">${String(p.id).padStart(3,'0')}</td>
+      <td class="mono" title="${esc(p.relpath||'')}">${esc(p.name)}</td>
+      <td>${p.ai?esc([p.ai.category,...(p.ai.tags||[])].join('、')):'<span style="color:var(--faint)">—</span>'}</td>
+      <td class="mono">${fmtDateHuman(p.exif.date)}</td>
+      <td class="mono">${esc(p.exif.model||'—')}</td>
+      <td>${p.ai?`<span class="nn${p.renamed?' renamed':''}">${p.renamed?'✓ ':''}${esc(nn||'')}</span>`:'—'}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ============ export ============ */
+$('btnCSV').onclick=()=>{
+  computeNames();
+  const rows=[['相对路径','原文件名','AI类别','标签','描述','拍摄日期','器材','GPS','建议新名','已重命名']];
+  photos.forEach(p=>rows.push([
+    p.relpath||'', p.name, p.ai?.category||'', (p.ai?.tags||[]).join('|'), p.ai?.desc||'',
+    fmtDateHuman(p.exif.date), p.exif.model||'', p.exif.gps||'', nameMap.get(p.id)||'', p.renamed?'是':''
+  ]));
+  const csv='\uFEFF'+rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+  dl(new Blob([csv],{type:'text/csv'}),'photo-index.csv');
+};
+
+$('btnZip').onclick=async ()=>{
+  computeNames();
+  const done=photos.filter(p=>p.ai);
+  if(!done.length) return;
+  const zip=new JSZip();
+  done.forEach(p=>zip.file(nameMap.get(p.id)||p.name, p.file));
+  dl(await zip.generateAsync({type:'blob'}),'renamed-photos.zip');
+};
+
+function dl(blob,name){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+
+/* ============ init ============ */
+loadSettings();
+initRestore();
+refresh();
+</script>
+</body>
+</html>
