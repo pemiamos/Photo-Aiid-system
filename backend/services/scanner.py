@@ -257,59 +257,80 @@ async def scan_directory(
     }
 
     photo_count = 0
+    cpu_count = os.cpu_count() or 4
+    concurrency = max(4, min(8, cpu_count))
+    sem = asyncio.Semaphore(concurrency)
 
-    for fpath in all_files:
-        try:
-            stat = fpath.stat()
-            file_size = stat.st_size
-            file_mtime = stat.st_mtime
+    # Establish a shared DB connection for all insertions in this scan session
+    conn = await db.get_db()
 
-            # Incremental scan: skip if same path+size+mtime
-            if await db.photo_exists_by_path_size_mtime(
-                str(fpath), file_size, file_mtime
-            ):
-                scan_progress["skipped_files"] += 1
-                scan_progress["scanned_files"] += 1
-                continue
+    try:
+        # Load all existing photo records for memory-based incremental scan
+        existing_photos = await db.get_photos_in_directory(str(root))
 
-            relative_path = str(fpath.relative_to(root))
-            mime_type = mimetypes.guess_type(str(fpath))[0] or ""
-            width, height = get_image_dimensions(str(fpath))
+        async def process_file(fpath: Path):
+            nonlocal photo_count
+            async with sem:
+                try:
+                    # CPU/IO bound stat
+                    stat = await asyncio.to_thread(fpath.stat)
+                    file_size = stat.st_size
+                    file_mtime = stat.st_mtime
+                    fpath_str = str(fpath)
 
-            # Insert photo record
-            photo_id = await db.insert_photo(
-                file_name=fpath.name,
-                file_path=str(fpath),
-                relative_path=relative_path,
-                file_size=file_size,
-                file_mtime=file_mtime,
-                mime_type=mime_type,
-                width=width,
-                height=height,
-                scan_session_id=session_id,
-            )
+                    # Incremental check using in-memory dict
+                    if fpath_str in existing_photos:
+                        db_id, db_size, db_mtime = existing_photos[fpath_str]
+                        if db_size == file_size and abs(db_mtime - file_mtime) < 0.1:
+                            scan_progress["skipped_files"] += 1
+                            scan_progress["scanned_files"] += 1
+                            return
 
-            if photo_id:
-                # Extract EXIF
-                exif = extract_exif(str(fpath))
-                await db.upsert_exif(photo_id, exif)
+                    relative_path = str(fpath.relative_to(root))
+                    mime_type = mimetypes.guess_type(str(fpath))[0] or ""
+                    
+                    # CPU bound dimension check
+                    width, height = await asyncio.to_thread(get_image_dimensions, str(fpath))
 
-                # Generate thumbnail
-                thumb_path = get_thumbnail_path(str(root), relative_path)
-                generate_thumbnail(str(fpath), thumb_path, max_size=thumbnail_max_size)
+                    # Insert photo record (using shared conn)
+                    photo_id = await db.insert_photo(
+                        file_name=fpath.name,
+                        file_path=fpath_str,
+                        relative_path=relative_path,
+                        file_size=file_size,
+                        file_mtime=file_mtime,
+                        mime_type=mime_type,
+                        width=width,
+                        height=height,
+                        scan_session_id=session_id,
+                        conn=conn,
+                    )
 
-                photo_count += 1
+                    if photo_id:
+                        # CPU bound EXIF check
+                        exif = await asyncio.to_thread(extract_exif, str(fpath))
+                        # Upsert exif (using shared conn)
+                        await db.upsert_exif(photo_id, exif, conn=conn)
 
-            scan_progress["scanned_files"] += 1
+                        # CPU bound thumbnail generation
+                        thumb_path = get_thumbnail_path(str(root), relative_path)
+                        await asyncio.to_thread(generate_thumbnail, str(fpath), thumb_path, max_size=thumbnail_max_size)
 
-            # Yield control periodically to keep the event loop responsive
-            if scan_progress["scanned_files"] % 20 == 0:
-                await asyncio.sleep(0)
+                        photo_count += 1
 
-        except Exception as e:
-            logger.error(f"Error scanning {fpath}: {e}")
-            scan_progress["error_count"] += 1
-            scan_progress["scanned_files"] += 1
+                    scan_progress["scanned_files"] += 1
+
+                except Exception as e:
+                    logger.error(f"Error scanning {fpath}: {e}")
+                    scan_progress["error_count"] += 1
+                    scan_progress["scanned_files"] += 1
+
+        if all_files:
+            await asyncio.gather(*(process_file(fpath) for fpath in all_files))
+
+    finally:
+        # Clean up the shared database connection
+        await conn.close()
 
     await db.update_scan_session(session_id, photo_count, "completed")
     scan_progress["running"] = False

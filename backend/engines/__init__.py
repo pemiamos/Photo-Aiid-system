@@ -8,11 +8,13 @@ if sentence-transformers is not installed.
 from engines.base import BaseEngine
 from engines.claude_engine import ClaudeEngine
 from engines.ollama_engine import OllamaEngine
+from engines.gemini_engine import GeminiEngine
 
 # Registry: name -> engine class
 ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
     "claude": ClaudeEngine,
     "ollama": OllamaEngine,
+    "gemini": GeminiEngine,
 }
 
 # Try to register CLIP (optional dependency)

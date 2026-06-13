@@ -4,11 +4,16 @@ import * as api from '../services/api'
 import './IndexTable.css'
 
 export default function IndexTable() {
-  const { photos, activeTag, searchQuery } = usePhotoStore()
+  const { photos, settings, activeTag, searchQuery } = usePhotoStore()
   const dispatch = usePhotoDispatch()
 
   const filteredPhotos = useMemo(() => {
-    let list = [...photos]
+    const normalizePath = (p) => p ? p.normalize('NFC').replace(/\\/g, '/').replace(/\/$/, '') : ''
+    const currentFolder = normalizePath(settings?.folderPath)
+    let list = currentFolder
+      ? photos.filter(p => p.file_path && normalizePath(p.file_path).startsWith(currentFolder))
+      : [...photos]
+
     if (searchQuery) {
       const q = searchQuery.toLowerCase()
       list = list.filter(p => {
@@ -22,7 +27,7 @@ export default function IndexTable() {
         (p.ai.category === activeTag || (p.ai.tags || []).includes(activeTag)))
     }
     return list
-  }, [photos, activeTag, searchQuery])
+  }, [photos, settings?.folderPath, activeTag, searchQuery])
 
   const fmtDate = (d) => {
     if (!d) return '—'
@@ -31,10 +36,13 @@ export default function IndexTable() {
   }
 
   const handleRename = async () => {
-    const count = photos.filter(p => p.ai).length
+    const analyzablePhotos = filteredPhotos.filter(p => p.ai)
+    const count = analyzablePhotos.length
+    if (count === 0) return
     if (!confirm(`将物理重命名磁盘上的 ${count} 个文件（不可自动恢复，但会下载日志）。\n\n确定执行？`)) return
     try {
-      const data = await api.renamePhotos({})
+      const ids = analyzablePhotos.map(p => p.id)
+      const data = await api.renamePhotos({ photo_ids: ids })
       alert(`重命名完成：成功 ${data.success}，失败 ${data.failed}`)
       // Refresh photos
       const res = await api.getPhotos()

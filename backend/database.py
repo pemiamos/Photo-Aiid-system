@@ -90,7 +90,7 @@ CREATE INDEX IF NOT EXISTS idx_exif_photo           ON exif_data(photo_id);
 
 async def get_db() -> aiosqlite.Connection:
     """Return an async connection with WAL mode and FK enforcement."""
-    db = await aiosqlite.connect(DB_PATH)
+    db = await aiosqlite.connect(DB_PATH, timeout=60.0)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
@@ -109,6 +109,8 @@ async def init_db():
             "claude_model": "claude-sonnet-4-6",
             "ollama_url": "http://localhost:11434",
             "ollama_model": "gemma3:12b",
+            "gemini_api_key": "",
+            "gemini_model": "gemini-2.5-flash",
             "rename_prefix": "SDEXP",
             "rename_template": "[前缀]_[AI标签]_[日期]_[序号]",
             "analysis_concurrency": "2",
@@ -175,27 +177,52 @@ async def insert_photo(
     width: int = 0,
     height: int = 0,
     scan_session_id: int | None = None,
+    conn: aiosqlite.Connection | None = None,
 ) -> int:
-    """Insert a photo row, return its id. Skips if file_path already exists."""
+    """Insert a photo row, return its id. Updates metadata if file_path exists but changed."""
     now = time.time()
-    db = await get_db()
+    should_close = False
+    if conn is None:
+        conn = await get_db()
+        should_close = True
     try:
-        cursor = await db.execute(
-            """INSERT OR IGNORE INTO photos
+        cursor = await conn.execute(
+            """INSERT INTO photos
                (file_name, file_path, relative_path, file_size, file_mtime,
                 mime_type, width, height, scan_status, scan_session_id, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+               ON CONFLICT(file_path) DO UPDATE SET
+                 file_size = excluded.file_size,
+                 file_mtime = excluded.file_mtime,
+                 width = excluded.width,
+                 height = excluded.height,
+                 scan_status = 'queued',
+                 updated_at = excluded.updated_at""",
             (file_name, file_path, relative_path, file_size, file_mtime,
              mime_type, width, height, scan_session_id, now, now),
         )
-        await db.commit()
-        if cursor.rowcount == 0:
-            # Already exists – return existing id
-            rows = await db.execute_fetchall(
-                "SELECT id FROM photos WHERE file_path = ?", (file_path,)
-            )
-            return rows[0]["id"] if rows else 0
-        return cursor.lastrowid
+        await conn.commit()
+        rows = await conn.execute_fetchall(
+            "SELECT id FROM photos WHERE file_path = ?", (file_path,)
+        )
+        return rows[0]["id"] if rows else 0
+    finally:
+        if should_close:
+            await conn.close()
+
+
+async def get_photos_in_directory(root_path: str) -> dict[str, tuple[int, int, float]]:
+    """Return a map of file_path -> (photo_id, file_size, file_mtime) for the folder."""
+    db = await get_db()
+    try:
+        norm_folder = root_path.replace("\\", "/").rstrip("/")
+        # We query paths under the root directory
+        rows = await db.execute_fetchall(
+            """SELECT id, file_path, file_size, file_mtime FROM photos 
+               WHERE file_path LIKE ? OR replace(file_path, '\\', '/') LIKE ?""",
+            (f"{norm_folder}/%", f"{norm_folder}/%")
+        )
+        return {r["file_path"]: (r["id"], r["file_size"], r["file_mtime"]) for r in rows}
     finally:
         await db.close()
 
@@ -229,6 +256,7 @@ async def get_photos(
     tag: str | None = None,
     search: str | None = None,
     scan_session_id: int | None = None,
+    folder_path: str | None = None,
 ) -> tuple[list[dict], int]:
     """Return (photos, total_count) with pagination and filters."""
     db = await get_db()
@@ -254,6 +282,10 @@ async def get_photos(
         if scan_session_id is not None:
             where_clauses.append("p.scan_session_id = ?")
             params.append(scan_session_id)
+        if folder_path:
+            norm_folder = folder_path.replace("\\", "/").rstrip("/")
+            where_clauses.append("(p.file_path LIKE ? OR replace(p.file_path, '\\', '/') LIKE ?)")
+            params.extend([f"{norm_folder}/%", f"{norm_folder}/%"])
 
         where = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -364,10 +396,13 @@ async def upsert_ai_result(
 # CRUD: EXIF
 # ---------------------------------------------------------------------------
 
-async def upsert_exif(photo_id: int, exif: dict):
-    db = await get_db()
+async def upsert_exif(photo_id: int, exif: dict, conn: aiosqlite.Connection | None = None):
+    should_close = False
+    if conn is None:
+        conn = await get_db()
+        should_close = True
     try:
-        await db.execute(
+        await conn.execute(
             """INSERT INTO exif_data
                (photo_id, date_time_original, camera_model, lens_model,
                 f_number, iso, focal_length, exposure_time, gps_lat, gps_lon)
@@ -391,9 +426,10 @@ async def upsert_exif(photo_id: int, exif: dict):
                 exif.get("gps_lon"),
             ),
         )
-        await db.commit()
+        await conn.commit()
     finally:
-        await db.close()
+        if should_close:
+            await conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -500,3 +536,16 @@ def _row_to_photo(row) -> dict:
         d.pop(k, None)
 
     return d
+
+
+async def clear_database():
+    """Clear all photos, exif, and scan sessions to clean up history."""
+    db = await get_db()
+    try:
+        # Deleting from photos will cascade delete exif_data and ai_results due to FOREIGN KEY cascades
+        await db.execute("DELETE FROM photos")
+        await db.execute("DELETE FROM scan_sessions")
+        await db.commit()
+    finally:
+        await db.close()
+

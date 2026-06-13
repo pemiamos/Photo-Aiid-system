@@ -47,12 +47,23 @@ export async function scanFolder(folderPath) {
   })
 }
 
+export async function selectFolder() {
+  return request('/select-folder', {
+    method: 'POST',
+  })
+}
+
+export async function getScanProgress() {
+  return request('/scan/progress')
+}
+
 /* ── Photos ── */
 export async function getPhotos(params = {}) {
   const qs = new URLSearchParams()
   if (params.tag) qs.set('tag', params.tag)
   if (params.q) qs.set('q', params.q)
   if (params.status) qs.set('status', params.status)
+  if (params.folder_path) qs.set('folder_path', params.folder_path)
   const query = qs.toString()
   return request(`/photos${query ? '?' + query : ''}`)
 }
@@ -67,6 +78,10 @@ export async function analyzePhotos(options = {}) {
     method: 'POST',
     body: JSON.stringify(options),
   })
+}
+
+export async function getAnalysisProgress() {
+  return request('/analyze/progress')
 }
 
 export async function analyzeOne(photoId) {

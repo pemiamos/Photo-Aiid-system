@@ -58,12 +58,17 @@ function PhotoCard({ photo, index }) {
 }
 
 export default function Gallery() {
-  const { photos, activeTag, searchQuery, analysisProgress, engineStatus } = usePhotoStore()
+  const { photos, settings, activeTag, searchQuery, analysisProgress, engineStatus } = usePhotoStore()
   const dispatch = usePhotoDispatch()
   const [localQuery, setLocalQuery] = useState('')
 
   const filteredPhotos = useMemo(() => {
-    let list = [...photos]
+    const normalizePath = (p) => p ? p.normalize('NFC').replace(/\\/g, '/').replace(/\/$/, '') : ''
+    const currentFolder = normalizePath(settings?.folderPath)
+    let list = currentFolder
+      ? photos.filter(p => p.file_path && normalizePath(p.file_path).startsWith(currentFolder))
+      : [...photos]
+
     const q = (searchQuery || localQuery).toLowerCase()
     if (q) {
       list = list.filter(p => {
@@ -77,7 +82,7 @@ export default function Gallery() {
         (p.ai.category === activeTag || (p.ai.tags || []).includes(activeTag)))
     }
     return list
-  }, [photos, activeTag, searchQuery, localQuery])
+  }, [photos, settings?.folderPath, activeTag, searchQuery, localQuery])
 
   const handleSearch = (e) => {
     setLocalQuery(e.target.value)
@@ -125,7 +130,7 @@ export default function Gallery() {
         </div>
       )}
 
-      {photos.length === 0 ? (
+      {filteredPhotos.length === 0 ? (
         <div className="empty-state">
           <b>暗房已就绪</b>
           <span>在左侧输入文件夹路径并扫描，AI 将自动识别内容、提取 EXIF、生成标签与建议文件名</span>

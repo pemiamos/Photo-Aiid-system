@@ -9,6 +9,8 @@ import io
 import json
 import logging
 import os
+import platform
+import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -82,6 +84,8 @@ class SettingsUpdate(BaseModel):
     claude_model: str | None = None
     ollama_url: str | None = None
     ollama_model: str | None = None
+    gemini_api_key: str | None = None
+    gemini_model: str | None = None
     rename_prefix: str | None = None
     rename_template: str | None = None
     analysis_concurrency: str | None = None
@@ -114,10 +118,21 @@ async def scan_folder(req: ScanRequest, bg: BackgroundTasks):
     if not os.path.isdir(folder):
         raise HTTPException(status_code=400, detail=f"路径不存在或不是文件夹: {folder}")
 
+    # Check if this is a new folder path to clear history
+    import unicodedata
+    def norm(p):
+        return unicodedata.normalize("NFC", p.replace("\\", "/").rstrip("/"))
+
+    settings = await db.get_settings()
+    old_folder = settings.get("last_folder", "")
+    
+    if old_folder and norm(old_folder) != norm(folder):
+        logger.info(f"New folder path detected: {folder}. Clearing previous scan and analysis records.")
+        await db.clear_database()
+
     # Save folder path to settings
     await db.update_settings({"last_folder": folder})
 
-    settings = await db.get_settings()
     thumb_size = int(settings.get("thumbnail_max_size", "512"))
 
     # Start scanning in background
@@ -146,10 +161,12 @@ async def list_photos(
     category: str | None = None,
     tag: str | None = None,
     q: str | None = None,
+    folder_path: str | None = None,
 ):
     photos, total = await db.get_photos(
         offset=offset, limit=limit,
         status=status, category=category, tag=tag, search=q,
+        folder_path=folder_path,
     )
     return {"photos": photos, "total": total, "offset": offset, "limit": limit}
 
@@ -326,6 +343,9 @@ async def semantic_search(req: SearchRequest):
     elif engine_name == "ollama":
         engine_kwargs["url"] = settings.get("ollama_url", "http://localhost:11434")
         engine_kwargs["model"] = settings.get("ollama_model", "gemma3:12b")
+    elif engine_name == "gemini":
+        engine_kwargs["api_key"] = settings.get("gemini_api_key", "")
+        engine_kwargs["model"] = settings.get("gemini_model", "gemini-2.5-flash")
 
     engine = get_engine(engine_name, **engine_kwargs)
 
@@ -336,13 +356,16 @@ async def semantic_search(req: SearchRequest):
     import re
     try:
         if hasattr(engine, 'analyze'):
-            # Use text-only call for Claude/Ollama
+            # Use text-only call for Claude/Ollama/Gemini
             from engines.claude_engine import ClaudeEngine
             from engines.ollama_engine import OllamaEngine
+            from engines.gemini_engine import GeminiEngine
             if isinstance(engine, ClaudeEngine):
                 text = await _claude_text_call(engine, prompt)
             elif isinstance(engine, OllamaEngine):
                 text = await _ollama_text_call(engine, prompt)
+            elif isinstance(engine, GeminiEngine):
+                text = await _gemini_text_call(engine, prompt)
             else:
                 return {"photos": [], "query": req.query, "error": "CLIP 不支持语义搜索"}
 
@@ -390,6 +413,28 @@ async def _ollama_text_call(engine, prompt):
     return data.get("message", {}).get("content", "")
 
 
+async def _gemini_text_call(engine, prompt):
+    import httpx
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 1000},
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            engine.api_url,
+            json=payload,
+            params={"key": engine.api_key},
+            headers={"Content-Type": "application/json"},
+        )
+    data = resp.json()
+    text = ""
+    for candidate in data.get("candidates", []):
+        for part in candidate.get("content", {}).get("parts", []):
+            if "text" in part:
+                text += part["text"]
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Tags
 # ---------------------------------------------------------------------------
@@ -412,6 +457,9 @@ async def get_settings():
     if masked.get("claude_api_key"):
         key = masked["claude_api_key"]
         masked["claude_api_key_masked"] = key[:10] + "…" if len(key) > 10 else "***"
+    if masked.get("gemini_api_key"):
+        key = masked["gemini_api_key"]
+        masked["gemini_api_key_masked"] = key[:10] + "…" if len(key) > 10 else "***"
     return masked
 
 
@@ -482,6 +530,9 @@ async def test_engine():
     elif engine_name == "ollama":
         engine_kwargs["url"] = settings.get("ollama_url", "http://localhost:11434")
         engine_kwargs["model"] = settings.get("ollama_model", "gemma3:12b")
+    elif engine_name == "gemini":
+        engine_kwargs["api_key"] = settings.get("gemini_api_key", "")
+        engine_kwargs["model"] = settings.get("gemini_model", "gemini-2.5-flash")
 
     try:
         engine = get_engine(engine_name, **engine_kwargs)
@@ -489,3 +540,72 @@ async def test_engine():
         return result
     except Exception as e:
         return {"ok": False, "message": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Native Folder Selector Dialog
+# ---------------------------------------------------------------------------
+
+@app.post("/api/select-folder")
+def select_folder():
+    system = platform.system()
+    path = None
+    logger.info(f"Opening native folder picker on {system}...")
+
+    if system == "Darwin":
+        # macOS: Run AppleScript to open folder picker and bring to front
+        cmd = [
+            "osascript", "-e",
+            'tell application "System Events"\n'
+            '   activate\n'
+            '   set file_path to POSIX path of (choose folder with prompt "请选择照片文件夹")\n'
+            'end tell\n'
+            'return file_path'
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if res.returncode == 0:
+                path = res.stdout.strip()
+                logger.info(f"Selected path via AppleScript: {path}")
+        except subprocess.TimeoutExpired:
+            logger.warning("AppleScript folder select timed out")
+        except Exception as e:
+            logger.error(f"macOS AppleScript folder select failed: {e}")
+
+    elif system == "Windows":
+        # Windows: Run PowerShell to open folder picker
+        cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
+            "$dialog.Description = '请选择照片文件夹'; "
+            "$res = $dialog.ShowDialog(); "
+            "if ($res -eq 'OK') { $dialog.SelectedPath }"
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if res.returncode == 0:
+                path = res.stdout.strip()
+                logger.info(f"Selected path via PowerShell: {path}")
+        except subprocess.TimeoutExpired:
+            logger.warning("PowerShell folder select timed out")
+        except Exception as e:
+            logger.error(f"Windows PowerShell folder select failed: {e}")
+
+    # Fallback to tkinter if no path selected yet (e.g., Linux or script errors)
+    if not path:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.wm_attributes("-topmost", 1)  # Bring to front
+            path = filedialog.askdirectory(title="请选择照片文件夹")
+            root.destroy()
+            if path:
+                logger.info(f"Selected path via Tkinter: {path}")
+        except Exception as e:
+            logger.error(f"Tkinter fallback failed: {e}")
+
+    return {"folder_path": path if path else ""}
+

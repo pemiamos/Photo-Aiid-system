@@ -7,6 +7,8 @@ const initialState = {
   settings: {
     engine: 'claude',
     apiKey: '',
+    geminiApiKey: '',
+    geminiModel: 'gemini-2.5-flash',
     ollamaUrl: 'http://localhost:11434',
     ollamaModel: 'gemma4:31b',
     prefix: 'SDEXP',

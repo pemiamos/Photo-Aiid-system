@@ -71,6 +71,9 @@ def start_backend():
     log("🚀 启动后端服务 (FastAPI @ :8000)...")
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "main:app", "--reload",
+         "--reload-exclude", "*.db",
+         "--reload-exclude", "*.db-*",
+         "--reload-exclude", "*.log",
          "--host", "0.0.0.0", "--port", "8000"],
         cwd=BACKEND_DIR,
         stdout=subprocess.PIPE,

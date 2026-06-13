@@ -46,6 +46,9 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
     elif engine_name == "ollama":
         engine_kwargs["url"] = settings.get("ollama_url", "http://localhost:11434")
         engine_kwargs["model"] = settings.get("ollama_model", "gemma3:12b")
+    elif engine_name == "gemini":
+        engine_kwargs["api_key"] = settings.get("gemini_api_key", "")
+        engine_kwargs["model"] = settings.get("gemini_model", "gemini-2.5-flash")
 
     engine = get_engine(engine_name, **engine_kwargs)
 
@@ -75,34 +78,48 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
         # Fall back to reading the original file (resize in memory)
         image_bytes = _read_and_resize(file_path)
 
-    # Determine context
-    folder_path = str(Path(relative_path).parent) if "/" in relative_path else ""
+    # Build rich folder context: root folder name + relative subdirectory
+    root_name = Path(root_path).name  # e.g. "2024-京都旅行"
+    rel_parent = str(Path(relative_path).parent) if "/" in relative_path else ""
+    if rel_parent and rel_parent != ".":
+        folder_path = f"{root_name}/{rel_parent}"
+    else:
+        folder_path = root_name
 
     await db.update_photo_status(photo_id, "analyzing")
 
-    try:
-        result = await engine.analyze(
-            image_bytes=image_bytes,
-            file_name=photo["file_name"],
-            folder_path=folder_path,
-        )
+    # Retry with backoff for rate-limit (429) errors
+    max_retries = 3
+    for attempt in range(max_retries + 1):
+        try:
+            result = await engine.analyze(
+                image_bytes=image_bytes,
+                file_name=photo["file_name"],
+                folder_path=folder_path,
+            )
 
-        # Store results
-        await db.upsert_ai_result(
-            photo_id=photo_id,
-            category=result.category,
-            tags=result.tags,
-            description=result.description,
-            slug=result.slug,
-            engine=result.engine,
-            raw_response=result.raw_response,
-        )
+            # Store results
+            await db.upsert_ai_result(
+                photo_id=photo_id,
+                category=result.category,
+                tags=result.tags,
+                description=result.description,
+                slug=result.slug,
+                engine=result.engine,
+                raw_response=result.raw_response,
+            )
 
-        return result
+            return result
 
-    except Exception as e:
-        await db.update_photo_status(photo_id, "error")
-        raise
+        except (RuntimeError, ValueError) as e:
+            err_str = str(e)
+            if ("429" in err_str or "503" in err_str) and attempt < max_retries:
+                wait = (attempt + 1) * 10  # 10s, 20s, 30s
+                logger.warning(f"API error, retrying in {wait}s... (attempt {attempt+1}/{max_retries})")
+                await asyncio.sleep(wait)
+                continue
+            await db.update_photo_status(photo_id, "error")
+            raise
 
 
 async def analyze_batch(
@@ -120,7 +137,12 @@ async def analyze_batch(
     if engine_name is None:
         engine_name = settings.get("engine", "claude")
     if concurrency is None:
-        concurrency = int(settings.get("analysis_concurrency", "2"))
+        concurrency = int(settings.get("analysis_concurrency", "1"))
+
+    # For cloud engines, use sequential processing to avoid rate limits
+    is_cloud = engine_name in ("gemini", "claude")
+    if is_cloud:
+        concurrency = 1
 
     # Get photos to analyze
     if photo_ids is None:
@@ -159,6 +181,9 @@ async def analyze_batch(
             try:
                 await analyze_single(photo_id, engine_name=engine_name)
                 analysis_progress["completed"] += 1
+                # Throttle cloud API calls (Gemini free: ~15 RPM)
+                if is_cloud:
+                    await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Analysis failed for photo {photo_id}: {e}")
                 analysis_progress["errors"] += 1

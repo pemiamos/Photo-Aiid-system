@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { usePhotoStore, usePhotoDispatch, Actions } from './stores/photoStore'
 import * as api from './services/api'
 import Header from './components/Header'
@@ -8,8 +8,17 @@ import IndexTable from './components/IndexTable'
 import AboutPage from './components/AboutPage'
 
 export default function App() {
-  const { activeTab, error } = usePhotoStore()
+  const { activeTab, error, settings } = usePhotoStore()
   const dispatch = usePhotoDispatch()
+
+  // Track previous folder path to clear search/filters upon folder switch
+  const prevFolderPathRef = useRef(settings?.folderPath)
+  useEffect(() => {
+    if (settings?.folderPath && settings.folderPath !== prevFolderPathRef.current) {
+      dispatch({ type: Actions.CLEAR_ALL })
+      prevFolderPathRef.current = settings.folderPath
+    }
+  }, [settings?.folderPath, dispatch])
 
   // Load settings from backend on mount
   useEffect(() => {
@@ -21,6 +30,8 @@ export default function App() {
             payload: {
               engine: data.engine || 'claude',
               apiKey: data.claude_api_key || '',
+              geminiApiKey: data.gemini_api_key || '',
+              geminiModel: data.gemini_model || 'gemini-2.5-flash',
               ollamaUrl: data.ollama_url || 'http://localhost:11434',
               ollamaModel: data.ollama_model || 'gemma3:12b',
               prefix: data.rename_prefix || 'SDEXP',
@@ -33,7 +44,30 @@ export default function App() {
       .catch(() => {
         // Backend not yet running, that's fine
       })
+
+    api.getScanProgress()
+      .then(progress => {
+        if (progress && progress.running) {
+          dispatch({ type: Actions.SET_SCAN_STATUS, payload: 'scanning' })
+        }
+      })
+      .catch(() => {
+        // Ignored
+      })
   }, [dispatch])
+
+  // Fetch photos whenever the active folder path changes
+  useEffect(() => {
+    api.getPhotos({ folder_path: settings?.folderPath || '' })
+      .then(data => {
+        if (data && data.photos) {
+          dispatch({ type: Actions.SET_PHOTOS, payload: data.photos })
+        }
+      })
+      .catch(() => {
+        // Ignored
+      })
+  }, [settings?.folderPath, dispatch])
 
   // Clear error after 5s
   useEffect(() => {

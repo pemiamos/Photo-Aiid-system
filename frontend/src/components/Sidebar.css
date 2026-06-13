@@ -52,6 +52,13 @@
 .folder-input-row input {
   flex: 1;
   min-width: 0;
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+
+.folder-input-row.dragging input {
+  border-color: var(--amber) !important;
+  background-color: rgba(232, 163, 61, .06) !important;
+  box-shadow: 0 0 0 2px rgba(232, 163, 61, .2) !important;
 }
 
 .folder-input-row .btn {
@@ -59,6 +66,10 @@
   padding: 7px 14px;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.folder-input-row .browse-btn {
+  padding: 7px 10px;
 }
 
 .engine-config {
@@ -121,3 +132,15 @@
 .test-result.success { color: var(--ok); }
 .test-result.error { color: var(--warn); }
 .test-result.testing { color: var(--muted); }
+
+/* ── scanning pulse animation ── */
+@keyframes scan-pulse {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; color: var(--amber); }
+  100% { opacity: 0.6; }
+}
+
+.scanning-pulse {
+  animation: scan-pulse 1.5s infinite ease-in-out;
+  font-weight: 500;
+}
