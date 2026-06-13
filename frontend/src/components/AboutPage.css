@@ -1,0 +1,56 @@
+/* ============================================================
+   AboutPage Component
+   ============================================================ */
+
+.about-section {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+.about-content {
+  max-width: 680px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+
+.about-content h2 {
+  color: var(--text);
+  font-size: 16px;
+  margin: 22px 0 8px;
+}
+
+.about-content h2:first-child {
+  margin-top: 0;
+}
+
+.about-content code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--amber);
+  background: var(--panel);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.about-content ul,
+.about-content ol {
+  padding-left: 20px;
+}
+
+.about-content li {
+  margin-bottom: 4px;
+}
+
+.about-content a {
+  color: var(--amber);
+  text-decoration: none;
+}
+
+.about-content a:hover {
+  text-decoration: underline;
+}
+
+.about-content p {
+  margin-bottom: 8px;
+}

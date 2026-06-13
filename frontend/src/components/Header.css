@@ -1,0 +1,106 @@
+/* ============================================================
+   Header Component
+   ============================================================ */
+
+.header {
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+
+.header-logo {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.header-logo b {
+  font-size: 15px;
+  letter-spacing: .02em;
+}
+
+.version-badge {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--amber);
+  border: 1px solid var(--amber-dim);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+
+.header-nav {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.header-nav button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all .15s var(--ease);
+}
+
+.header-nav button:hover {
+  color: var(--text);
+}
+
+.header-nav button.active {
+  color: var(--text);
+  background: var(--panel-2);
+  box-shadow: inset 0 -2px 0 var(--amber);
+}
+
+.header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.header-folder {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.engine-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.engine-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  display: inline-block;
+  transition: background .3s var(--ease);
+}
+
+.engine-dot.busy {
+  background: var(--amber);
+  animation: pulse 1s infinite;
+}
+
+.engine-dot.done {
+  background: var(--ok);
+}
+
+.engine-dot.error {
+  background: var(--warn);
+}

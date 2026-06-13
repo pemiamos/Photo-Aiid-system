@@ -1,0 +1,212 @@
+/* ============================================================
+   Gallery Component
+   ============================================================ */
+
+.gallery-section {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+/* ── search ── */
+.search-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.search-row input {
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 13px;
+  font-family: var(--sans);
+  transition: border-color .15s var(--ease);
+}
+
+.search-row input:focus {
+  outline: none;
+  border-color: var(--amber-dim);
+}
+
+.search-btn {
+  white-space: nowrap;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--amber);
+  padding: 0 16px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: var(--sans);
+  transition: border-color .15s var(--ease);
+}
+
+.search-btn:hover {
+  border-color: var(--amber-dim);
+}
+
+/* ── progress ── */
+.progress-bar-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-bottom: 12px;
+}
+
+.progress-text {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.progress-track {
+  height: 3px;
+  background: var(--panel-2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--amber);
+  transition: width .3s var(--ease);
+}
+
+/* ── empty ── */
+.empty-state {
+  text-align: center;
+  color: var(--faint);
+  padding: 80px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 2;
+}
+
+.empty-state b {
+  color: var(--muted);
+  font-size: 14px;
+  display: block;
+  font-family: var(--sans);
+  margin-bottom: 8px;
+}
+
+/* ── masonry gallery ── */
+.gallery-grid {
+  columns: 4 240px;
+  column-gap: 14px;
+}
+
+/* ── photo card ── */
+.photo-card {
+  break-inside: avoid;
+  margin-bottom: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  animation: fadeIn .3s var(--ease) both;
+}
+
+.card-edge {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: #101114;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--amber);
+  letter-spacing: .08em;
+  border-bottom: 1px solid #000;
+}
+
+.card-perf {
+  color: var(--faint);
+}
+
+.card-img-wrap {
+  position: relative;
+}
+
+.card-img-wrap img {
+  width: 100%;
+  display: block;
+  background: #000;
+  min-height: 60px;
+}
+
+.card-status {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .65);
+  backdrop-filter: blur(4px);
+}
+
+.card-status.queued { color: var(--muted); }
+.card-status.analyzing { color: var(--amber); }
+.card-status.error { color: var(--warn); }
+
+.card-meta {
+  padding: 9px 10px 11px;
+}
+
+.card-fname {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-newname {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ok);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.card-desc {
+  font-size: 12px;
+  color: var(--text);
+  margin: 7px 0 6px;
+  line-height: 1.5;
+}
+
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.card-tag {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.card-exif {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--faint);
+  margin-top: 7px;
+  line-height: 1.6;
+}

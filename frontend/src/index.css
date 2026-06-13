@@ -1,0 +1,198 @@
+/* ============================================================
+   Photo-Aiid-system · Design System
+   ============================================================ */
+
+:root {
+  /* ── palette ── */
+  --bg: #16181c;
+  --panel: #1d2026;
+  --panel-2: #22262d;
+  --line: #2d323a;
+  --text: #e8e6df;
+  --muted: #8d929c;
+  --faint: #5b606a;
+  --amber: #e8a33d;
+  --amber-dim: #a06f24;
+  --ok: #7fb069;
+  --warn: #d96c5f;
+
+  /* ── typography ── */
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --sans: -apple-system, 'PingFang SC', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;
+
+  /* ── spacing ── */
+  --header-h: 52px;
+  --sidebar-w: 280px;
+
+  /* ── transitions ── */
+  --ease: cubic-bezier(.4, 0, .2, 1);
+}
+
+/* ── reset ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── scrollbar ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+}
+
+/* ── shared UI atoms ── */
+input[type="text"],
+input[type="password"],
+select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+  transition: border-color .15s var(--ease);
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+select:focus {
+  outline: none;
+  border-color: var(--amber-dim);
+}
+
+select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%235b606a'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 28px;
+}
+
+/* ── buttons ── */
+.btn {
+  width: 100%;
+  border: none;
+  border-radius: 7px;
+  padding: 9px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: var(--sans);
+  transition: all .15s var(--ease);
+}
+
+.btn.primary {
+  background: var(--amber);
+  color: #1a1408;
+  font-weight: 600;
+}
+.btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn.ghost {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+.btn.ghost:hover {
+  border-color: var(--faint);
+}
+
+.btn.danger {
+  background: none;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+}
+.btn.danger:hover {
+  background: rgba(217, 108, 95, .08);
+}
+
+.btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.btn + .btn {
+  margin-top: 8px;
+}
+
+/* ── pulse animation ── */
+@keyframes pulse {
+  50% { opacity: .3; }
+}
+
+/* ── fade in ── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── app layout ── */
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── error toast ── */
+.error-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(217, 108, 95, .95);
+  color: #fff;
+  padding: 10px 24px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  z-index: 100;
+  animation: fadeIn .2s var(--ease);
+  backdrop-filter: blur(8px);
+  max-width: 600px;
+  text-align: center;
+}
+

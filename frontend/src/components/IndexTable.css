@@ -1,0 +1,74 @@
+/* ============================================================
+   IndexTable Component
+   ============================================================ */
+
+.index-section {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+
+.table-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.table-actions .btn {
+  width: auto;
+  padding: 8px 18px;
+}
+
+.table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: auto;
+  background: var(--panel);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+
+td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  color: var(--muted);
+}
+
+td.mono {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.faint {
+  color: var(--faint);
+}
+
+.new-name {
+  color: var(--ok);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+tr:hover td {
+  background: var(--panel-2);
+}
