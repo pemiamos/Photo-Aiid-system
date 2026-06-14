@@ -25,7 +25,7 @@
 - 🔍 **语义搜索** — 用自然语言描述找照片
 - 📊 **索引导出** — CSV 一键导出（含摄影师/地点/EXIF）
 - 🌓 **暗色主题** — 摄影师友好的专业暗色 UI
-- 💻 **跨平台** — Mac / Windows / Linux 浏览器通用
+- 💻 **跨平台** — 支持源码运行（浏览器，Mac / Windows / Linux）或安装打包版桌面应用（Mac / Windows）
 
 ---
 
@@ -66,6 +66,29 @@ npm run dev
 
 ---
 
+## 📦 桌面应用（打包版）
+
+无需安装 Node/Python，直接安装即用：
+
+- **macOS**：拖入「应用程序」双击启动（首次需右键打开以绕过 Gatekeeper，详见 [使用教程](docs/使用教程.md)）
+- **Windows**：运行 NSIS 安装包
+
+桌面版基于 [Tauri](https://tauri.app/) 封装，内置冻结的 Python 后端，本机自动启动/退出，无需手动开服务。详细使用说明（API Key 配置、常见问题）见 [docs/使用教程.md](docs/使用教程.md)，App 内「使用教程」标签也有同样内容。
+
+### 本地构建
+
+```bash
+# macOS（需 Node、Rust、Python 3.12 打包虚环境 .venv-build）
+bash scripts/build-mac.sh
+
+# Windows（需 Node、Rust(MSVC)、Python 3.12 打包虚环境 .venv-build）
+powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1
+```
+
+也可在 GitHub Actions 中手动触发 `.github/workflows/build-windows.yml`（Actions → Build Windows App → Run workflow）自动构建 Windows 安装包，构建产物在该 run 的 Artifacts 中下载。
+
+---
+
 ## 🏗️ 项目结构
 
 ```
@@ -75,8 +98,12 @@ Photo-Aiid-system/
 │   ├── engines/           # AI 引擎 (zhipu / claude / gemini / ollama / clip)
 │   ├── services/          # 业务逻辑 (扫描 / 分析 / 重命名 / 离线地理编码)
 │   ├── data/              # 中国行政区划数据 (离线反向地理编码)
+│   ├── run_server.py      # 桌面打包版后端入口（PyInstaller）
+│   ├── photo_aiid_backend.spec
 │   └── main.py            # API 入口
-├── docs/                  # 历史文档归档
+├── src-tauri/             # 桌面应用外壳 (Tauri)
+├── scripts/               # 打包构建脚本 (build-mac.sh / build-win.ps1)
+├── docs/                  # 使用教程与历史文档归档
 ├── start.py               # 一键启动脚本
 └── README.md
 ```
