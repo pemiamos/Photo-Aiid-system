@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 import database as db
+import intake
 from engines import get_engine, list_engines
 from services import scanner, analyzer, renamer
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_db()
+    await intake.init_intake_db()
     logger.info("Photo-Aiid-system backend started ✓")
     yield
 
@@ -52,6 +54,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 投稿征稿模块（网页上传页 + 凭证接口 + 看板）。必须在 "/" 静态兜底挂载之前注册。
+app.include_router(intake.router)
 
 
 # ---------------------------------------------------------------------------

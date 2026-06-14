@@ -20,6 +20,9 @@ src-tauri/resources/
 # Thumbnails
 .thumbnails/
 
+# 投稿原型本地存储（摄影师上传的照片）
+backend/intake_data/
+
 # IDE
 .vscode/
 .idea/

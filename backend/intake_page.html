@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>照片征稿 · 摄影师上传</title>
+<style>
+  :root{
+    --bg:#f5f5f4; --card:#fff; --line:#e5e4e1; --line2:#d6d4cf;
+    --text:#1f1f1d; --muted:#6b6a64; --hint:#9a988f;
+    --info:#185fa5; --info-bg:#e6f1fb; --info-dk:#0c447c; --ok:#0f6e56; --err:#a32d2d;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.6;padding:32px 16px;}
+  .wrap{max-width:600px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 28px;}
+  .title{display:flex;align-items:center;gap:10px;font-size:19px;font-weight:600;}
+  .sub{font-size:13px;color:var(--muted);margin:4px 0 18px;}
+  input[type=text]{border:1px solid var(--line2);border-radius:8px;padding:9px 11px;
+    font-size:14px;font-family:inherit;background:#fff;}
+  input[type=text]:focus{outline:none;border-color:var(--info);box-shadow:0 0 0 3px var(--info-bg);}
+  .code-row{display:flex;gap:8px;align-items:center;margin-bottom:16px;}
+  .code-row input{width:110px;text-transform:uppercase;font-weight:600;letter-spacing:1px;}
+  .code-row button{padding:8px 14px;border:1px solid var(--line2);border-radius:8px;background:#fff;
+    font-size:13px;cursor:pointer;}
+  .msg{font-size:13px;}
+  .msg.ok{color:var(--ok);} .msg.err{color:var(--err);}
+  .history{background:var(--info-bg);border-radius:9px;padding:12px 14px;margin-bottom:18px;display:none;}
+  .history .hd{font-size:13px;font-weight:600;color:var(--info-dk);margin-bottom:6px;}
+  .history .it{display:flex;justify-content:space-between;font-size:12px;color:var(--info);padding:2px 0;}
+  .body{opacity:.45;pointer-events:none;transition:opacity .2s;}
+  .body.on{opacity:1;pointer-events:auto;}
+  .drop{border:1.5px dashed var(--line2);border-radius:8px;padding:16px;text-align:center;
+    cursor:pointer;transition:border-color .15s;font-size:13px;color:var(--muted);margin-bottom:12px;}
+  .drop:hover{border-color:var(--info);} .drop.over{border-color:var(--info);background:var(--info-bg);}
+  .drop .ic{font-size:24px;}
+  .tools{display:flex;align-items:center;gap:8px;background:var(--info-bg);border-radius:8px;
+    padding:8px 10px;margin-bottom:12px;}
+  .tools .sel{font-size:13px;color:var(--info-dk);white-space:nowrap;}
+  .tools input{flex:1;height:34px;}
+  .tools button{white-space:nowrap;padding:6px 14px;border:none;border-radius:7px;
+    background:var(--info);color:#fff;font-size:13px;cursor:pointer;}
+  .tools button:disabled{background:var(--line2);color:var(--hint);cursor:not-allowed;}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}
+  .thumb{border:2px solid var(--line);border-radius:8px;overflow:hidden;cursor:pointer;
+    transition:border-color .12s;}
+  .thumb.sel{border-color:var(--info);}
+  .thumb .img{height:60px;background:var(--bg) center/cover no-repeat;display:flex;
+    align-items:center;justify-content:center;position:relative;font-size:22px;color:var(--hint);}
+  .thumb .ck{position:absolute;top:3px;left:4px;font-size:13px;color:#fff;background:var(--info);
+    border-radius:50%;width:18px;height:18px;line-height:18px;text-align:center;display:none;}
+  .thumb.sel .ck{display:block;}
+  .thumb .bar{position:absolute;left:0;bottom:0;height:3px;background:var(--ok);width:0;}
+  .thumb .lbl{padding:4px 6px;font-size:11px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .thumb .lbl.todo{color:var(--err);} .thumb .lbl.done{color:var(--ok);}
+  .agree{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--muted);margin:6px 0 16px;line-height:1.5;}
+  .submit{width:100%;border:none;border-radius:9px;padding:12px;font-size:14px;font-weight:600;}
+  .submit.ready{background:var(--info);color:#fff;cursor:pointer;}
+  .submit.ready:hover{background:#134e89;}
+  .submit.block{background:var(--bg);color:var(--hint);border:1px solid var(--line);cursor:not-allowed;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="title"><span>📷</span><span id="bookTitle">照片征稿</span></div>
+    <p class="sub">凭投稿码上传。先把照片全部拖进来，框选同类批量标注内容，标注完才能提交。</p>
+
+    <div class="code-row">
+      <input type="text" id="code" placeholder="投稿码" />
+      <button id="verifyBtn">确认</button>
+      <span class="msg" id="codeMsg"></span>
+    </div>
+
+    <div class="history" id="history">
+      <div class="hd" id="historyHd"></div>
+      <div id="historyList"></div>
+    </div>
+
+    <div class="body" id="body">
+      <input type="file" id="picker" multiple accept="image/*,.nef,.cr2,.arw,.dng" style="display:none" />
+      <div class="drop" id="drop"><div class="ic">☁️</div>点击或拖拽照片到此处</div>
+
+      <div class="tools">
+        <span class="sel" id="selCount">已选 0 张</span>
+        <input type="text" id="labelInput" placeholder="输入内容标注，如：夔门日出" />
+        <button id="applyBtn" disabled>批量标注</button>
+      </div>
+
+      <div class="grid" id="grid"></div>
+
+      <label class="agree">
+        <input type="checkbox" id="license" />
+        <span>本人确认拥有所提交照片的完整著作权，并授权出版方在本书及相关宣传中使用。授权时间将被记录存档。</span>
+      </label>
+
+      <button class="submit block" id="submit" disabled>请先拉入照片</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  var state = { code: null, photos: [] };
+  var idSeq = 0;
+
+  var $ = function(id){ return document.getElementById(id); };
+  var grid=$('grid'), selCount=$('selCount'), applyBtn=$('applyBtn'),
+      labelInput=$('labelInput'), submit=$('submit'), drop=$('drop'),
+      picker=$('picker'), license=$('license'), body=$('body');
+
+  // ---- 投稿码校验 ----
+  $('verifyBtn').addEventListener('click', verify);
+  $('code').addEventListener('keydown', function(e){ if(e.key==='Enter') verify(); });
+
+  function verify(){
+    var code = $('code').value.trim();
+    if(!code) return;
+    var fd = new FormData(); fd.append('code', code);
+    fetch('/api/intake/verify', { method:'POST', body:fd })
+      .then(function(r){ if(!r.ok) throw new Error('投稿码无效'); return r.json(); })
+      .then(function(d){
+        state.code = code;
+        $('bookTitle').textContent = '《'+d.book_title+'》照片征稿';
+        $('codeMsg').textContent = '✓ 欢迎回来，'+d.name;
+        $('codeMsg').className = 'msg ok';
+        renderHistory(d);
+        body.classList.add('on');
+        render();
+      })
+      .catch(function(){
+        state.code = null;
+        $('codeMsg').textContent = '✗ 投稿码无效';
+        $('codeMsg').className = 'msg err';
+        body.classList.remove('on');
+      });
+  }
+
+  function renderHistory(d){
+    if(d.history && d.history.length){
+      $('history').style.display='block';
+      $('historyHd').textContent = '🕘 你已提交 '+d.total+' 张';
+      $('historyList').innerHTML = d.history.map(function(h){
+        return '<div class="it"><span>📁 '+h.label+' · '+h.count+' 张</span><span>'+h.date+'</span></div>';
+      }).join('');
+    } else {
+      $('history').style.display='none';
+    }
+  }
+
+  // ---- 拉入照片 ----
+  drop.addEventListener('click', function(){ picker.click(); });
+  picker.addEventListener('change', function(e){ addFiles(e.target.files); picker.value=''; });
+  drop.addEventListener('dragover', function(e){ e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', function(){ drop.classList.remove('over'); });
+  drop.addEventListener('drop', function(e){
+    e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files);
+  });
+
+  function addFiles(fileList){
+    Array.prototype.forEach.call(fileList, function(f){
+      state.photos.push({ id: ++idSeq, file: f, label: '', sel: false, progress: 0 });
+    });
+    render();
+  }
+
+  // ---- 标注 + 渲染 ----
+  labelInput.addEventListener('input', refreshControls);
+  applyBtn.addEventListener('click', function(){
+    var v = labelInput.value.trim(); if(!v) return;
+    state.photos.forEach(function(p){ if(p.sel){ p.label=v; p.sel=false; } });
+    labelInput.value=''; render();
+  });
+  license.addEventListener('change', refreshControls);
+
+  function render(){
+    grid.innerHTML='';
+    state.photos.forEach(function(p){
+      var d=document.createElement('div');
+      d.className='thumb'+(p.sel?' sel':'');
+      var bg = p.file && p.file.type.indexOf('image/')===0 ? URL.createObjectURL(p.file) : '';
+      d.innerHTML='<div class="img" '+(bg?'style="background-image:url('+bg+')"':'')+'>'+
+        (bg?'':'🖼️')+'<span class="ck">✓</span><span class="bar" style="width:'+p.progress+'%"></span></div>'+
+        '<div class="lbl '+(p.label?'done':'todo')+'">'+(p.label||'未标注')+'</div>';
+      d.onclick=function(){ p.sel=!p.sel; render(); };
+      grid.appendChild(d);
+    });
+    refreshControls();
+  }
+
+  function refreshControls(){
+    var selected = state.photos.filter(function(p){return p.sel;}).length;
+    var todo = state.photos.filter(function(p){return !p.label;}).length;
+    selCount.textContent = '已选 '+selected+' 张';
+    applyBtn.disabled = selected===0 || !labelInput.value.trim();
+
+    if(state.photos.length===0){ setSubmit(false, '请先拉入照片'); return; }
+    if(todo>0){ setSubmit(false, '还有 '+todo+' 张未标注，无法提交'); return; }
+    if(!license.checked){ setSubmit(false, '请先勾选版权授权'); return; }
+    setSubmit(true, '提交本次投稿（'+state.photos.length+' 张）');
+  }
+
+  function setSubmit(ready, text){
+    submit.textContent = text;
+    submit.className = 'submit '+(ready?'ready':'block');
+    submit.disabled = !ready;
+  }
+
+  // ---- 提交：创建会话 → 逐张上传（带进度）→ 完成 ----
+  submit.addEventListener('click', function(){
+    if(submit.disabled) return;
+    submit.disabled = true; submit.textContent = '上传中…';
+
+    var fd = new FormData();
+    fd.append('code', state.code);
+    fd.append('license_agreed', '1');
+    fetch('/api/intake/submit', { method:'POST', body:fd })
+      .then(function(r){ return r.json(); })
+      .then(function(d){ return uploadAll(d.submission_id); })
+      .then(function(sid){
+        var fd2 = new FormData(); fd2.append('submission_id', sid);
+        return fetch('/api/intake/complete', { method:'POST', body:fd2 });
+      })
+      .then(function(){
+        setSubmit(false, '✓ 投稿成功，共 '+state.photos.length+' 张');
+        submit.style.color = 'var(--ok)';
+      })
+      .catch(function(){ setSubmit(true, '上传失败，点击重试'); });
+  });
+
+  function uploadAll(sid){
+    var queue = state.photos.slice();
+    function next(i){
+      if(i>=queue.length) return Promise.resolve(sid);
+      return uploadOne(sid, queue[i]).then(function(){ return next(i+1); });
+    }
+    return next(0);
+  }
+
+  function uploadOne(sid, p){
+    return new Promise(function(resolve, reject){
+      var fd = new FormData();
+      fd.append('submission_id', sid);
+      fd.append('content_label', p.label);
+      fd.append('file', p.file, p.file.name);
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/intake/upload');
+      xhr.upload.onprogress = function(e){
+        if(e.lengthComputable){ p.progress = Math.round(e.loaded/e.total*100); render(); }
+      };
+      xhr.onload = function(){ p.progress=100; render(); xhr.status<300 ? resolve() : reject(); };
+      xhr.onerror = reject;
+      xhr.send(fd);
+    });
+  }
+</script>
+</body>
+</html>
