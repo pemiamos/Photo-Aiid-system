@@ -25,12 +25,36 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Form, UploadFile, File, HTTPException
+from fastapi import APIRouter, Form, UploadFile, File, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, HTMLResponse
 
 import database as db
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# 管理后台鉴权
+#   设置环境变量 INTAKE_ADMIN_TOKEN 后，/api/intake/admin/* 与后台页面需登录；
+#   未设置时本地放行（仅便于本机原型调试，对外暴露前务必设置）。
+# ---------------------------------------------------------------------------
+ADMIN_TOKEN = os.environ.get("INTAKE_ADMIN_TOKEN", "")
+_ADMIN_COOKIE = "intake_admin"
+
+
+def _admin_cookie_value() -> str:
+    return hmac.new(ADMIN_TOKEN.encode(), b"intake-admin-v1", hashlib.sha256).hexdigest()
+
+
+def _admin_ok(request: Request) -> bool:
+    if not ADMIN_TOKEN:
+        return True
+    return request.cookies.get(_ADMIN_COOKIE) == _admin_cookie_value()
+
+
+async def require_admin(request: Request):
+    """API 守卫：未登录返回 401。"""
+    if not _admin_ok(request):
+        raise HTTPException(401, "需要管理员登录")
 
 INTAKE_DATA = Path(
     os.environ.get(
@@ -425,7 +449,7 @@ async def complete(submission_id: int = Form(...)):
 # ---------------------------------------------------------------------------
 
 @router.get("/api/intake/admin/submissions")
-async def admin_submissions():
+async def admin_submissions(_: None = Depends(require_admin)):
     """看板数据：每位摄影师交了多少、未交名单。"""
     conn = await db.get_db()
     try:
@@ -479,8 +503,28 @@ async def admin_submissions():
 # 必须加管理员认证（见 PRD 第 7 章安全约束）。
 # ---------------------------------------------------------------------------
 
+@router.post("/api/intake/admin/login")
+async def admin_login(response: Response, password: str = Form(...)):
+    """校验管理口令，成功则下发签名 Cookie。"""
+    if not ADMIN_TOKEN:
+        return {"ok": True, "note": "未设置口令，已放行"}
+    if password != ADMIN_TOKEN:
+        raise HTTPException(401, "口令错误")
+    response.set_cookie(
+        _ADMIN_COOKIE, _admin_cookie_value(),
+        httponly=True, samesite="lax", max_age=7 * 24 * 3600,
+    )
+    return {"ok": True}
+
+
+@router.post("/api/intake/admin/logout")
+async def admin_logout(response: Response):
+    response.delete_cookie(_ADMIN_COOKIE)
+    return {"ok": True}
+
+
 @router.get("/api/intake/admin/codes")
-async def list_codes():
+async def list_codes(_: None = Depends(require_admin)):
     """列出本书所有投稿码及其投稿状态。"""
     conn = await db.get_db()
     try:
@@ -518,6 +562,7 @@ async def create_code(
     name: str = Form(...),
     contact: str = Form(""),
     code: str = Form(""),
+    _: None = Depends(require_admin),
 ):
     """新增一位摄影师并分配投稿码（code 留空则自动生成）。"""
     name = name.strip()
@@ -544,7 +589,7 @@ async def create_code(
 
 
 @router.post("/api/intake/admin/codes/batch")
-async def create_codes_batch(names: str = Form(...)):
+async def create_codes_batch(names: str = Form(...), _: None = Depends(require_admin)):
     """批量新增：每行一个姓名，自动分配连续投稿码。"""
     created = []
     conn = await db.get_db()
@@ -568,7 +613,7 @@ async def create_codes_batch(names: str = Form(...)):
 
 
 @router.delete("/api/intake/admin/codes/{pid}")
-async def delete_code(pid: int):
+async def delete_code(pid: int, _: None = Depends(require_admin)):
     """删除投稿码。若该摄影师已有投稿，拒绝删除以防孤立已上传文件。"""
     conn = await db.get_db()
     try:
@@ -589,14 +634,18 @@ async def delete_code(pid: int):
 
 
 @router.get("/intake/admin/codes", response_class=HTMLResponse)
-async def codes_page():
+async def codes_page(request: Request):
     """投稿码管理后台（原型）。"""
+    if not _admin_ok(request):
+        return HTMLResponse(_LOGIN_HTML)
     return HTMLResponse(_CODES_HTML)
 
 
 @router.get("/intake/admin", response_class=HTMLResponse)
-async def admin_page():
+async def admin_page(request: Request):
     """极简征稿看板（原型）。"""
+    if not _admin_ok(request):
+        return HTMLResponse(_LOGIN_HTML)
     return HTMLResponse(_ADMIN_HTML)
 
 
@@ -723,3 +772,32 @@ document.getElementById('batchBtn').onclick=function(){
 };
 load();
 </script></body></html>"""
+
+
+_LOGIN_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理员登录</title><style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;background:#f5f5f4;color:#1f1f1d;
+display:flex;min-height:90vh;align-items:center;justify-content:center}
+.box{background:#fff;border:1px solid #e5e4e1;border-radius:14px;padding:28px 30px;width:300px}
+h1{font-size:18px;margin:0 0 16px}
+input{width:100%;border:1px solid #d6d4cf;border-radius:8px;padding:10px 12px;font-size:14px;margin-bottom:12px}
+input:focus{outline:none;border-color:#185fa5;box-shadow:0 0 0 3px #e6f1fb}
+button{width:100%;background:#185fa5;color:#fff;border:none;border-radius:8px;padding:11px;font-size:14px;cursor:pointer}
+button:hover{background:#134e89}.err{color:#a32d2d;font-size:13px;min-height:18px}
+</style></head><body><div class="box">
+<h1>征稿后台 · 管理员登录</h1>
+<input type="password" id="pw" placeholder="管理口令" autofocus>
+<div class="err" id="err"></div>
+<button id="btn">登录</button>
+<script>
+function go(){
+  var fd=new FormData(); fd.append('password',document.getElementById('pw').value);
+  fetch('/api/intake/admin/login',{method:'POST',body:fd}).then(function(r){
+    if(r.ok){ location.reload(); }
+    else { document.getElementById('err').textContent='口令错误'; }
+  });
+}
+document.getElementById('btn').onclick=go;
+document.getElementById('pw').addEventListener('keydown',function(e){if(e.key==='Enter')go();});
+</script></div></body></html>"""

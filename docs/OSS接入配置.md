@@ -57,7 +57,13 @@ export OSS_ACCESS_KEY_ID="RAM用户的AK"
 export OSS_ACCESS_KEY_SECRET="RAM用户的SK"
 export OSS_STS_ROLE_ARN="acs:ram::账号ID:role/角色名"
 # 可选：export OSS_STS_DURATION="3600"   # 临时凭证有效期（秒）
+
+# 管理后台口令（强烈建议设置；不设则后台对任何人开放，仅适合本机调试）
+export INTAKE_ADMIN_TOKEN="一个足够强的口令"
 ```
+
+设置 `INTAKE_ADMIN_TOKEN` 后，访问 `/intake/admin` 或 `/intake/admin/codes` 会先要求输入口令，
+登录态保存在签名 Cookie 中（7 天）。摄影师上传相关接口不受影响、仍公开。
 
 启动后访问 `GET /api/intake/oss-config`：
 - 返回 `{"mode":"oss",...}` → 已切到直传。
@@ -80,7 +86,22 @@ export OSS_STS_ROLE_ARN="acs:ram::账号ID:role/角色名"
 ---
 
 ## 5. 生产化待办（上线前）
-- [ ] 管理接口 `/api/intake/admin/*` 加管理员鉴权（当前原型未鉴权）。
+- [x] 管理接口 `/api/intake/admin/*` 加管理员鉴权 → 设 `INTAKE_ADMIN_TOKEN`（见上）。
 - [ ] 上传页走 HTTPS + 正式域名，并把域名加入 OSS CORS。
-- [ ] 截稿后用 `rclone` 把整本搬到 Cloudflare R2 归档（见 PRD 第 3.3）。
+- [x] 截稿后用 `rclone` 把整本搬到 R2 归档 → `scripts/archive-to-r2.sh <书目代号>`。
 - [ ] AK/SK 用最小权限子账号，定期轮换。
+
+## 6. 归档到 Cloudflare R2
+
+截稿后一条命令搬运 + 核对（参考 `scripts/rclone.conf.example` 配好 rclone）：
+
+```bash
+# 先 copy + check，OSS 原样保留（安全）
+scripts/archive-to-r2.sh 2026-sanxia
+
+# 确认无误后，再次运行并清空 OSS 省存储费
+scripts/archive-to-r2.sh 2026-sanxia --purge
+```
+
+脚本会：导出投稿/授权记录到 `{书}/_meta/submissions.csv` → `rclone copy` → `rclone check`
+核对（不通过绝不清理）→ 加 `--purge` 且二次确认后才清空 OSS。归档长期保留在 R2。

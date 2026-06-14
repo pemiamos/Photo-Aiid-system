@@ -1,0 +1,17 @@
+# rclone 配置模板 —— 复制到 ~/.config/rclone/rclone.conf 并填入你的密钥
+# 用途：把征稿原图从阿里云 OSS 搬到 Cloudflare R2 长期归档
+# 文档见 docs/OSS接入配置.md 与 征稿上传-设计需求文档.md 第 3 章
+
+[oss]
+type = s3
+provider = Alibaba
+access_key_id = 你的OSS_AK
+secret_access_key = 你的OSS_SK
+endpoint = oss-cn-hangzhou.aliyuncs.com        # 改成你的地域 endpoint
+
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = 你的R2_AK
+secret_access_key = 你的R2_SK
+endpoint = https://<account_id>.r2.cloudflarestorage.com
