@@ -53,7 +53,7 @@ const OLLAMA_MODELS = [
 export default function Sidebar() {
   const state = usePhotoStore()
   const dispatch = usePhotoDispatch()
-  const { photos, tags, settings, engineStatus, stats, activeTag, selectedIds } = state
+  const { photos, tags, settings, engineStatus, stats, activeTag, selectedIds, submitMode } = state
 
   const [testResult, setTestResult] = useState(null)
   const [scanning, setScanning] = useState(false)
@@ -463,6 +463,9 @@ export default function Sidebar() {
 
   return (
     <aside className="sidebar">
+      {/* 投稿模式下，整块编辑功能锁定变灰 */}
+      <div className={`sidebar-edit${submitMode ? ' locked' : ''}`}
+        aria-disabled={submitMode}>
       {/* ── 链接照片 ── */}
       <div className="sidebar-section">
         <h3>链接照片</h3>
@@ -777,6 +780,18 @@ export default function Sidebar() {
             {testResult.message}
           </div>
         )}
+      </div>
+      </div>{/* /.sidebar-edit */}
+
+      {/* ── 投稿接口（模式开关，下沉紧贴底部横线） ── */}
+      <div className="sidebar-section submit-toggle">
+        <button
+          className={`btn ${submitMode ? 'primary' : 'ghost'}`}
+          onClick={() => dispatch({ type: Actions.SET_SUBMIT_MODE, payload: !submitMode })}
+          title="进入/退出投稿模式：在画廊里勾选要投稿的照片后确认提交"
+        >
+          {submitMode ? '退出投稿模式' : '投稿接口'}
+        </button>
       </div>
 
       <footer className="sidebar-footer">

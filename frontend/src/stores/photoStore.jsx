@@ -19,7 +19,8 @@ const initialState = {
   engineStatus: 'idle',       // idle | busy | done | error
   scanStatus: 'idle',         // idle | scanning | done
   analysisProgress: null,     // { current, total } | null
-  activeTab: 'gallery',       // gallery | index | about
+  activeTab: 'gallery',       // gallery | index | submit | about
+  submitMode: false,          // 投稿模式：锁定编辑、画廊选片投稿
   activeTag: null,
   selectedIds: [],            // user-selected photo ids for 自选分析
   searchQuery: '',
@@ -45,6 +46,7 @@ export const Actions = {
   SET_SCAN_STATUS: 'SET_SCAN_STATUS',
   SET_ANALYSIS_PROGRESS: 'SET_ANALYSIS_PROGRESS',
   SET_ACTIVE_TAB: 'SET_ACTIVE_TAB',
+  SET_SUBMIT_MODE: 'SET_SUBMIT_MODE',
   SET_ACTIVE_TAG: 'SET_ACTIVE_TAG',
   TOGGLE_SELECT: 'TOGGLE_SELECT',
   SET_SELECTED: 'SET_SELECTED',
@@ -96,6 +98,16 @@ function photoReducer(state, action) {
 
     case Actions.SET_ACTIVE_TAB:
       return { ...state, activeTab: action.payload }
+
+    case Actions.SET_SUBMIT_MODE:
+      // 退出投稿模式时，若停留在投稿页则回到画廊
+      return {
+        ...state,
+        submitMode: action.payload,
+        activeTab: action.payload
+          ? state.activeTab
+          : (state.activeTab === 'submit' ? 'gallery' : state.activeTab),
+      }
 
     case Actions.SET_ACTIVE_TAG:
       return { ...state, activeTag: action.payload }

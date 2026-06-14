@@ -50,6 +50,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"],
+    # 允许桌面 App 投稿模式从任意来源跨域调用投稿接口（Tauri webview 等）。
+    # 生产可收紧为具体来源；admin 用 SameSite=Lax Cookie，跨站 POST 不带 Cookie，无 CSRF 暴露。
+    allow_origin_regex=".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

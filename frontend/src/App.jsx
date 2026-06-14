@@ -5,6 +5,7 @@ import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import Gallery from './components/Gallery'
 import IndexTable from './components/IndexTable'
+import SubmitPanel from './components/SubmitPanel'
 import AboutPage from './components/AboutPage'
 
 export default function App() {
@@ -89,6 +90,7 @@ export default function App() {
         <main className="app-main">
           {activeTab === 'gallery' && <Gallery />}
           {activeTab === 'index' && <IndexTable />}
+          {activeTab === 'submit' && <SubmitPanel />}
           {activeTab === 'about' && <AboutPage />}
         </main>
       </div>

@@ -1,0 +1,44 @@
+.submit-panel {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 28px;
+}
+.submit-panel h2 { margin: 0 0 4px; font-size: 20px; }
+.sp-hint { color: var(--text-muted, #6b6a64); font-size: 13px; margin: 0 0 18px; }
+
+.sp-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.sp-row label { width: 110px; font-size: 13px; color: var(--text-muted, #6b6a64); }
+.sp-row input, .sp-label, .sp-toolbar button, .sp-row button {
+  font-family: inherit; font-size: 14px;
+}
+.sp-row input { border: 1px solid #d6d4cf; border-radius: 8px; padding: 8px 11px; }
+.sp-row button { padding: 8px 16px; border: 1px solid #d6d4cf; border-radius: 8px; background: #fff; cursor: pointer; }
+.sp-msg { font-size: 13px; }
+.sp-msg.ok { color: #0f6e56; }
+.sp-msg.err { color: #a32d2d; }
+
+.sp-history { background: #e6f1fb; border-radius: 8px; padding: 8px 12px; margin: 6px 0 14px; font-size: 13px; color: #185fa5; }
+.sp-tag { display: inline-block; background: #fff; border-radius: 6px; padding: 1px 8px; margin: 0 4px; }
+
+.sp-toolbar { display: flex; align-items: center; gap: 10px; font-size: 13px; margin: 8px 0 10px; }
+.sp-toolbar button { padding: 4px 12px; border: 1px solid #d6d4cf; border-radius: 7px; background: #fff; cursor: pointer; font-size: 13px; }
+
+.sp-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; max-height: 460px; overflow-y: auto; }
+.sp-empty { color: #9a988f; font-size: 14px; text-align: center; padding: 24px; }
+.sp-item { display: flex; align-items: center; gap: 12px; border: 1px solid #e5e4e1; border-radius: 10px; padding: 8px 12px; }
+.sp-item.on { border-color: #185fa5; background: #f5f9fe; }
+.sp-item img { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; background: #f1efe8; }
+.sp-meta { flex: 1; min-width: 0; }
+.sp-fn { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-ai { font-size: 12px; color: #6b6a64; display: flex; gap: 10px; flex-wrap: wrap; }
+.sp-label { width: 150px; border: 1px solid #d6d4cf; border-radius: 7px; padding: 6px 9px; font-size: 13px; }
+.sp-pct { font-size: 12px; color: #185fa5; width: 36px; text-align: right; }
+
+.sp-agree { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: #6b6a64; line-height: 1.5; margin: 4px 0 12px; }
+.sp-warn { color: #a32d2d; font-size: 13px; margin: 0 0 8px; }
+
+.sp-submit { width: 100%; border: none; border-radius: 9px; padding: 12px; font-size: 14px; font-weight: 600; background: #185fa5; color: #fff; cursor: pointer; }
+.sp-submit:disabled { background: #e5e4e1; color: #9a988f; cursor: not-allowed; }
+.sp-result { text-align: center; margin: 12px 0 0; font-size: 14px; }
+.sp-result.ok { color: #0f6e56; }
+.sp-result.err { color: #a32d2d; }

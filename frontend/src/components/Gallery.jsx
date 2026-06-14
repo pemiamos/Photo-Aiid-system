@@ -174,7 +174,7 @@ function fmtDuration(sec) {
 }
 
 export default function Gallery() {
-  const { photos, settings, activeTag, searchQuery, analysisProgress, engineStatus, selectedIds } = usePhotoStore()
+  const { photos, settings, activeTag, searchQuery, analysisProgress, engineStatus, selectedIds, submitMode } = usePhotoStore()
   const dispatch = usePhotoDispatch()
   const [localQuery, setLocalQuery] = useState('')
   const [batchOpen, setBatchOpen] = useState(false)
@@ -319,6 +319,16 @@ export default function Gallery() {
           >
             批量编辑
           </button>
+          {submitMode && (
+            <button
+              className="select-btn submit-confirm"
+              onClick={() => dispatch({ type: Actions.SET_ACTIVE_TAB, payload: 'submit' })}
+              disabled={selectedIds.length === 0}
+              title="确认所选照片，进入提交页"
+            >
+              确认投稿 ({selectedIds.length})
+            </button>
+          )}
         </div>
       )}
 

@@ -235,8 +235,14 @@
 }
 
 /* ── 底部署名 ── */
-.sidebar-footer {
+/* 投稿接口按钮下沉，把多余空间挤到它上方，使其紧贴底部横线 */
+.sidebar-section.submit-toggle {
   margin-top: auto;
+  margin-bottom: 8px;
+}
+
+.sidebar-footer {
+  margin-top: 0;
   padding: 12px 0 4px;
   border-top: 1px solid var(--line);
   display: flex;
@@ -274,4 +280,11 @@
 }
 .sidebar-footer a:hover {
   color: var(--amber);
+}
+
+/* 投稿模式：编辑区锁定变灰 */
+.sidebar-edit.locked {
+  opacity: .4;
+  pointer-events: none;
+  filter: grayscale(0.3);
 }
