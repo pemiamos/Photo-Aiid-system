@@ -233,3 +233,45 @@
   animation: scan-pulse 1.5s infinite ease-in-out;
   font-weight: 500;
 }
+
+/* ── 底部署名 ── */
+.sidebar-footer {
+  margin-top: auto;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+.footer-logo {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  /* 去色 + 提亮成浅灰，与两行文字同色调 */
+  filter: grayscale(1) brightness(1.5) contrast(1.1);
+}
+.footer-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* 拉伸到最宽一行（CC 行）的宽度，便于第二行两端对齐 */
+  align-items: stretch;
+}
+.footer-credit {
+  /* 两端对齐：拉开字间距，使首尾与第一行对齐 */
+  text-align: justify;
+  text-align-last: justify;
+}
+.sidebar-footer a {
+  color: var(--faint);
+  text-decoration: none;
+  transition: color .15s var(--ease);
+}
+.sidebar-footer a:hover {
+  color: var(--amber);
+}

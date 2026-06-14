@@ -4,7 +4,7 @@ import './Header.css'
 const TABS = [
   { key: 'gallery', label: '画廊' },
   { key: 'index',   label: '索引表' },
-  { key: 'about',   label: '说明' },
+  { key: 'about',   label: '使用教程' },
 ]
 
 const STATUS_TEXT = {

@@ -202,13 +202,24 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
                 extra_context=extra_context,
             )
 
-            # Location priority: an explicit place name written in the
-            # filename/folder wins (the user's own ground truth, e.g. 石臼湖),
-            # then precise GPS, then AI-inferred. Normalize: drop
-            # country/province, join levels with '-'.
-            final_location = geocode.normalize_location(
-                result.place_in_name or gps_location or result.location
-            )
+            # Location: GPS is the authoritative macro-location when present —
+            # it is consistent and accurate, whereas the model's per-image text
+            # guess is not. A place name written in the filename/folder only
+            # *refines* GPS as a finer sub-level within the same region (e.g.
+            # 上海市-松江区-石臼湖); it never replaces the region. This stops a
+            # project/series name like 「沿长江」 or the photo subject from
+            # overriding correct GPS, which previously made sibling photos in one
+            # folder land on wildly different locations. Without GPS, fall back to
+            # the filename place, then the AI-inferred location.
+            gps_norm = geocode.normalize_location(gps_location)
+            place_norm = geocode.normalize_location(result.place_in_name)
+            if gps_norm:
+                if place_norm and place_norm not in gps_norm and gps_norm not in place_norm:
+                    final_location = f"{gps_norm}-{place_norm}"
+                else:
+                    final_location = gps_norm
+            else:
+                final_location = place_norm or geocode.normalize_location(result.location)
 
             # Photographer: prefer the model's field, fall back to a filename/
             # folder heuristic so a name is never silently dropped.
@@ -240,7 +251,7 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
                 logger.warning(f"API error, retrying in {wait}s... (attempt {attempt+1}/{max_retries})")
                 await asyncio.sleep(wait)
                 continue
-            await db.update_photo_status(photo_id, "error")
+            await db.update_photo_status(photo_id, "error", error_message=err_str)
             raise
 
 

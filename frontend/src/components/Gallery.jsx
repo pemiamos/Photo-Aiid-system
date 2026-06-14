@@ -104,7 +104,10 @@ function PhotoCard({ photo, index, selected, onToggle, suggestedName }) {
         />
         <span className={`card-check${selected ? ' on' : ''}`}>✓</span>
         {statusClass !== 'done' && (
-          <span className={`card-status ${statusClass}`}>
+          <span
+            className={`card-status ${statusClass}`}
+            title={statusClass === 'error' ? (photo.error_message || '分析失败（原因未知）') : ''}
+          >
             {statusLabel[statusClass] || ''}
           </span>
         )}

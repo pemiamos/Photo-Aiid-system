@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS photos (
     width         INTEGER,
     height        INTEGER,
     scan_status   TEXT    NOT NULL DEFAULT 'queued',   -- queued | analyzing | done | error
+    error_message TEXT,                                 -- last analysis failure reason (NULL when ok)
     scan_session_id INTEGER,
     created_at    REAL    NOT NULL,
     updated_at    REAL    NOT NULL,
@@ -112,6 +113,10 @@ async def init_db():
             await db.execute("ALTER TABLE ai_results ADD COLUMN location TEXT")
         if "photographer" not in col_names:
             await db.execute("ALTER TABLE ai_results ADD COLUMN photographer TEXT")
+        pcols = await db.execute_fetchall("PRAGMA table_info(photos)")
+        pcol_names = {c["name"] for c in pcols}
+        if "error_message" not in pcol_names:
+            await db.execute("ALTER TABLE photos ADD COLUMN error_message TEXT")
         # Seed defaults
         defaults = {
             "engine": "ollama",
@@ -365,12 +370,17 @@ async def get_photos(
         await db.close()
 
 
-async def update_photo_status(photo_id: int, status: str):
+async def update_photo_status(
+    photo_id: int, status: str, error_message: str | None = None
+):
+    """Update a photo's analysis status. When status != 'error', the stored
+    failure reason is cleared so a later success doesn't keep a stale message."""
     db = await get_db()
     try:
+        msg = error_message if status == "error" else None
         await db.execute(
-            "UPDATE photos SET scan_status = ?, updated_at = ? WHERE id = ?",
-            (status, time.time(), photo_id),
+            "UPDATE photos SET scan_status = ?, error_message = ?, updated_at = ? WHERE id = ?",
+            (status, msg, time.time(), photo_id),
         )
         await db.commit()
     finally:
@@ -435,7 +445,7 @@ async def upsert_ai_result(
              description, slug, location, photographer, engine, raw_response, now),
         )
         await db.execute(
-            "UPDATE photos SET scan_status = 'done', updated_at = ? WHERE id = ?",
+            "UPDATE photos SET scan_status = 'done', error_message = NULL, updated_at = ? WHERE id = ?",
             (now, photo_id),
         )
         await db.commit()

@@ -778,6 +778,20 @@ export default function Sidebar() {
           </div>
         )}
       </div>
+
+      <footer className="sidebar-footer">
+        <img className="footer-logo" src="/logo.png" alt="星尘远征队" />
+        <div className="footer-text">
+          <a
+            href="https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh"
+            target="_blank"
+            rel="noreferrer"
+          >
+            CC BY-NC-SA 4.0
+          </a>
+          <span className="footer-credit">星尘远征队 出品</span>
+        </div>
+      </footer>
     </aside>
   )
 }
