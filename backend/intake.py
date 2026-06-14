@@ -114,6 +114,19 @@ async def _get_photographer(code: str):
         await conn.close()
 
 
+async def _next_code(conn, book_code: str) -> str:
+    """按 A01、A02… 生成下一个可用投稿码（跳过已存在的最大序号）。"""
+    rows = await conn.execute_fetchall(
+        "SELECT invite_code FROM photographers WHERE book_code = ?", (book_code,)
+    )
+    mx = 0
+    for r in rows:
+        m = re.match(r"^A(\d+)$", r["invite_code"] or "")
+        if m:
+            mx = max(mx, int(m.group(1)))
+    return f"A{mx + 1:02d}"
+
+
 # ---------------------------------------------------------------------------
 # 摄影师端接口
 # ---------------------------------------------------------------------------
@@ -299,6 +312,128 @@ async def admin_submissions():
     }
 
 
+# ---------------------------------------------------------------------------
+# 编辑端：投稿码管理
+#
+# 注意：以下管理接口在原型阶段未加鉴权，仅供本机/内网使用。对外暴露前
+# 必须加管理员认证（见 PRD 第 7 章安全约束）。
+# ---------------------------------------------------------------------------
+
+@router.get("/api/intake/admin/codes")
+async def list_codes():
+    """列出本书所有投稿码及其投稿状态。"""
+    conn = await db.get_db()
+    try:
+        rows = await conn.execute_fetchall(
+            "SELECT p.id, p.invite_code, p.name, p.contact, "
+            "       COUNT(sf.id) AS files "
+            "FROM photographers p "
+            "LEFT JOIN submissions s ON s.photographer_id = p.id "
+            "LEFT JOIN submission_files sf ON sf.submission_id = s.id "
+            "WHERE p.book_code = ? "
+            "GROUP BY p.id ORDER BY p.invite_code",
+            (BOOK_CODE,),
+        )
+        return {
+            "book_code": BOOK_CODE,
+            "book_title": BOOK_TITLE,
+            "rows": [
+                {
+                    "id": r["id"],
+                    "code": r["invite_code"],
+                    "name": r["name"],
+                    "contact": r["contact"] or "",
+                    "files": r["files"],
+                    "submitted": r["files"] > 0,
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        await conn.close()
+
+
+@router.post("/api/intake/admin/codes")
+async def create_code(
+    name: str = Form(...),
+    contact: str = Form(""),
+    code: str = Form(""),
+):
+    """新增一位摄影师并分配投稿码（code 留空则自动生成）。"""
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "姓名不能为空")
+    conn = await db.get_db()
+    try:
+        invite = _safe(code).upper() if code.strip() else await _next_code(conn, BOOK_CODE)
+        exists = await conn.execute_fetchall(
+            "SELECT 1 FROM photographers WHERE invite_code = ?", (invite,)
+        )
+        if exists:
+            raise HTTPException(409, f"投稿码 {invite} 已存在")
+        cur = await conn.execute(
+            "INSERT INTO photographers "
+            "(book_code, invite_code, name, contact, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (BOOK_CODE, invite, name, contact.strip(), time.time()),
+        )
+        await conn.commit()
+        return {"ok": True, "id": cur.lastrowid, "code": invite, "name": name}
+    finally:
+        await conn.close()
+
+
+@router.post("/api/intake/admin/codes/batch")
+async def create_codes_batch(names: str = Form(...)):
+    """批量新增：每行一个姓名，自动分配连续投稿码。"""
+    created = []
+    conn = await db.get_db()
+    try:
+        for line in names.splitlines():
+            nm = line.strip()
+            if not nm:
+                continue
+            invite = await _next_code(conn, BOOK_CODE)
+            await conn.execute(
+                "INSERT INTO photographers "
+                "(book_code, invite_code, name, contact, created_at) "
+                "VALUES (?, ?, ?, '', ?)",
+                (BOOK_CODE, invite, nm, time.time()),
+            )
+            await conn.commit()  # 逐条提交，确保 _next_code 看到最新序号
+            created.append({"code": invite, "name": nm})
+        return {"ok": True, "created": created}
+    finally:
+        await conn.close()
+
+
+@router.delete("/api/intake/admin/codes/{pid}")
+async def delete_code(pid: int):
+    """删除投稿码。若该摄影师已有投稿，拒绝删除以防孤立已上传文件。"""
+    conn = await db.get_db()
+    try:
+        files = await conn.execute_fetchall(
+            "SELECT COUNT(sf.id) AS c FROM submission_files sf "
+            "JOIN submissions s ON sf.submission_id = s.id "
+            "WHERE s.photographer_id = ?",
+            (pid,),
+        )
+        if files and files[0]["c"] > 0:
+            raise HTTPException(409, "该摄影师已有投稿，不能删除")
+        await conn.execute("DELETE FROM submissions WHERE photographer_id = ?", (pid,))
+        await conn.execute("DELETE FROM photographers WHERE id = ?", (pid,))
+        await conn.commit()
+        return {"ok": True}
+    finally:
+        await conn.close()
+
+
+@router.get("/intake/admin/codes", response_class=HTMLResponse)
+async def codes_page():
+    """投稿码管理后台（原型）。"""
+    return HTMLResponse(_CODES_HTML)
+
+
 @router.get("/intake/admin", response_class=HTMLResponse)
 async def admin_page():
     """极简征稿看板（原型）。"""
@@ -317,16 +452,114 @@ th{background:#fafaf8;color:#6b6a64;font-weight:600}
 .no{color:#a32d2d}.yes{color:#0f6e56}.tag{display:inline-block;background:#e6f1fb;color:#185fa5;
 border-radius:6px;padding:1px 7px;margin:1px;font-size:12px}
 </style></head><body>
-<h1 id="title">征稿看板</h1><div class="stat" id="stat">加载中…</div>
+<h1 id="title">征稿看板</h1>
+<div class="stat" id="stat">加载中… · <a href="/intake/admin/codes">→ 投稿码管理</a></div>
 <table><thead><tr><th>投稿码</th><th>摄影师</th><th>状态</th><th>张数</th><th>大小</th><th>内容标注</th></tr></thead>
 <tbody id="tb"></tbody></table>
 <script>
 fetch('/api/intake/admin/submissions').then(r=>r.json()).then(d=>{
   document.getElementById('title').textContent='《'+d.book_title+'》征稿看板';
-  document.getElementById('stat').textContent='已投稿 '+d.submitted+' / '+d.total_photographers+' 位摄影师';
+  document.getElementById('stat').innerHTML='已投稿 '+d.submitted+' / '+d.total_photographers+
+    ' 位摄影师 · <a href="/intake/admin/codes">→ 投稿码管理</a>';
   document.getElementById('tb').innerHTML=d.rows.map(r=>'<tr><td>'+r.code+'</td><td>'+r.name+
     '</td><td class="'+(r.submitted?'yes':'no')+'">'+(r.submitted?'已交':'未交')+'</td><td>'+
     r.files+'</td><td>'+r.mb+' MB</td><td>'+(r.labels.map(l=>'<span class="tag">'+l.label+
     ' '+l.count+'</span>').join('')||'—')+'</td></tr>').join('');
 });
+</script></body></html>"""
+
+
+_CODES_HTML = """<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>投稿码管理</title><style>
+body{font-family:-apple-system,"PingFang SC",sans-serif;background:#f5f5f4;color:#1f1f1d;
+max-width:820px;margin:0 auto;padding:28px 16px;line-height:1.6}
+h1{font-size:20px;margin-bottom:2px}h2{font-size:15px;margin:22px 0 10px;color:#444}
+.stat{color:#6b6a64;font-size:14px;margin-bottom:8px}a{color:#185fa5}
+.panel{background:#fff;border:1px solid #e5e4e1;border-radius:12px;padding:16px 18px;margin-bottom:14px}
+input,textarea,button{font-family:inherit;font-size:14px}
+input,textarea{border:1px solid #d6d4cf;border-radius:8px;padding:8px 10px;background:#fff}
+input:focus,textarea:focus{outline:none;border-color:#185fa5;box-shadow:0 0 0 3px #e6f1fb}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{background:#185fa5;color:#fff;border:none;border-radius:8px;padding:8px 16px;cursor:pointer}
+.btn:hover{background:#134e89}.btn.ghost{background:#fff;color:#185fa5;border:1px solid #d6d4cf}
+.btn.sm{padding:3px 10px;font-size:12px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e4e1}
+th,td{text-align:left;padding:9px 11px;font-size:13px;border-bottom:1px solid #eee}
+th{background:#fafaf8;color:#6b6a64;font-weight:600}
+.code{font-weight:600;letter-spacing:1px}
+.no{color:#a32d2d}.yes{color:#0f6e56}
+.link{color:#185fa5;font-size:12px;word-break:break-all}
+.msg{font-size:13px;color:#0f6e56;margin-left:8px}
+</style></head><body>
+<h1 id="title">投稿码管理</h1>
+<div class="stat"><a href="/intake/admin">← 返回征稿看板</a></div>
+
+<div class="panel">
+  <h2 style="margin-top:0">新增摄影师</h2>
+  <div class="row">
+    <input id="name" placeholder="姓名" style="width:130px">
+    <input id="contact" placeholder="联系方式（选填）" style="width:180px">
+    <input id="custom" placeholder="自定义码（选填）" style="width:130px">
+    <button class="btn" id="addBtn">添加（自动生成码）</button>
+    <span class="msg" id="addMsg"></span>
+  </div>
+  <h2>批量新增（每行一个姓名，自动连号）</h2>
+  <div class="row" style="align-items:flex-start">
+    <textarea id="batch" rows="3" placeholder="张伟&#10;李娜&#10;王芳" style="width:280px"></textarea>
+    <button class="btn ghost" id="batchBtn">批量添加</button>
+    <span class="msg" id="batchMsg"></span>
+  </div>
+</div>
+
+<table><thead><tr><th>投稿码</th><th>姓名</th><th>联系方式</th><th>状态</th>
+<th>投稿链接</th><th></th></tr></thead><tbody id="tb"></tbody></table>
+
+<script>
+var origin = location.origin;
+function load(){
+  fetch('/api/intake/admin/codes').then(r=>r.json()).then(d=>{
+    document.getElementById('title').textContent='《'+d.book_title+'》投稿码管理';
+    document.getElementById('tb').innerHTML = d.rows.map(function(r){
+      var link = origin+'/intake?code='+r.code;
+      return '<tr><td class="code">'+r.code+'</td><td>'+r.name+'</td><td>'+(r.contact||'—')+
+        '</td><td class="'+(r.submitted?'yes':'no')+'">'+(r.submitted?'已交 '+r.files:'未交')+
+        '</td><td><span class="link">'+link+'</span></td>'+
+        '<td style="white-space:nowrap"><button class="btn ghost sm" onclick="copy(\\''+link+
+        '\\')">复制</button> '+(r.submitted?'':'<button class="btn ghost sm" onclick="del('+
+        r.id+')">删除</button>')+'</td></tr>';
+    }).join('') || '<tr><td colspan="6" style="color:#9a988f">还没有投稿码，先在上方添加</td></tr>';
+  });
+}
+function copy(t){ navigator.clipboard.writeText(t).then(function(){ alert('已复制：'+t); }); }
+function del(id){
+  if(!confirm('删除该投稿码？')) return;
+  fetch('/api/intake/admin/codes/'+id,{method:'DELETE'}).then(function(r){
+    if(!r.ok) return r.json().then(function(e){ alert(e.detail||'删除失败'); });
+    load();
+  });
+}
+document.getElementById('addBtn').onclick=function(){
+  var fd=new FormData();
+  fd.append('name',document.getElementById('name').value);
+  fd.append('contact',document.getElementById('contact').value);
+  fd.append('code',document.getElementById('custom').value);
+  fetch('/api/intake/admin/codes',{method:'POST',body:fd}).then(function(r){
+    return r.json().then(function(d){
+      var m=document.getElementById('addMsg');
+      if(!r.ok){ m.style.color='#a32d2d'; m.textContent=d.detail||'添加失败'; return; }
+      m.style.color='#0f6e56'; m.textContent='已添加 '+d.code+' · '+d.name;
+      document.getElementById('name').value='';document.getElementById('contact').value='';
+      document.getElementById('custom').value=''; load();
+    });
+  });
+};
+document.getElementById('batchBtn').onclick=function(){
+  var fd=new FormData(); fd.append('names',document.getElementById('batch').value);
+  fetch('/api/intake/admin/codes/batch',{method:'POST',body:fd}).then(r=>r.json()).then(function(d){
+    document.getElementById('batchMsg').textContent='已批量添加 '+d.created.length+' 位';
+    document.getElementById('batch').value=''; load();
+  });
+};
+load();
 </script></body></html>"""

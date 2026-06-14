@@ -114,6 +114,10 @@
   $('verifyBtn').addEventListener('click', verify);
   $('code').addEventListener('keydown', function(e){ if(e.key==='Enter') verify(); });
 
+  // 从投稿链接 ?code=A01 自动带入并校验
+  var urlCode = new URLSearchParams(location.search).get('code');
+  if(urlCode){ $('code').value = urlCode; verify(); }
+
   function verify(){
     var code = $('code').value.trim();
     if(!code) return;
