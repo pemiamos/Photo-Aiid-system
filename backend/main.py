@@ -767,3 +767,21 @@ def select_folder():
 
     return {"folder_path": path if path else ""}
 
+
+# ---------------------------------------------------------------------------
+# 托管前端构建产物 (生产 / 打包模式)
+# 必须放在所有 @app.<method> 路由定义之后：挂在 "/" 的 StaticFiles 会兜底
+# 一切未被 /api 等路由命中的请求，并以 index.html 支持单页应用。
+# ---------------------------------------------------------------------------
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+_dist = os.environ.get(
+    "PHOTO_AIID_DIST",
+    os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"),
+)
+if os.path.isdir(_dist):
+    app.mount("/", StaticFiles(directory=_dist, html=True), name="frontend")
+    logger.info(f"Serving frontend from: {_dist}")
+else:
+    logger.info(f"Frontend dist not found ({_dist}); API-only mode.")
+

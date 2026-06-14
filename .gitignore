@@ -1,12 +1,18 @@
 # Dependencies
 node_modules/
 .venv/
+.venv-build/
 __pycache__/
 *.pyc
 
 # Build output
 dist/
 build/
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+src-tauri/resources/
 
 # Database
 *.db
@@ -28,3 +34,4 @@ Thumbs.db
 
 # Claude local settings (may contain secrets)
 .claude/settings.local.json
+.claude/settings.json
