@@ -12,11 +12,19 @@ Photo-Aiid-system · 投稿征稿模块（M2 网页原型）
 不触碰现有 photos / ai_results 等表。
 """
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import re
 import time
+import urllib.parse
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Form, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
@@ -36,6 +44,89 @@ _PAGE = os.path.join(os.path.dirname(__file__), "intake_page.html")
 # 原型阶段的书目代号（正式版应支持多书目）
 BOOK_CODE = os.environ.get("INTAKE_BOOK", "2026-sanxia")
 BOOK_TITLE = os.environ.get("INTAKE_BOOK_TITLE", "三峡画册")
+
+# ---------------------------------------------------------------------------
+# 阿里云 OSS 直传配置（全部来自环境变量；任一缺失则自动回退本地直存模式）
+#   OSS_REGION            如 oss-cn-hangzhou（带 oss- 前缀，供浏览器 ali-oss 用）
+#   OSS_BUCKET            存储桶名，如 photo-intake
+#   OSS_ACCESS_KEY_ID     拥有 sts:AssumeRole 权限的子账号 AK
+#   OSS_ACCESS_KEY_SECRET 对应 SK
+#   OSS_STS_ROLE_ARN      被扮演的 RAM 角色 ARN（该角色有写桶权限）
+# 详见 docs/OSS接入配置.md
+# ---------------------------------------------------------------------------
+OSS_REGION = os.environ.get("OSS_REGION", "")           # oss-cn-hangzhou
+OSS_BUCKET = os.environ.get("OSS_BUCKET", "")
+OSS_AK = os.environ.get("OSS_ACCESS_KEY_ID", "")
+OSS_SK = os.environ.get("OSS_ACCESS_KEY_SECRET", "")
+OSS_ROLE_ARN = os.environ.get("OSS_STS_ROLE_ARN", "")
+OSS_STS_DURATION = int(os.environ.get("OSS_STS_DURATION", "3600"))
+
+
+def _oss_configured() -> bool:
+    return all([OSS_REGION, OSS_BUCKET, OSS_AK, OSS_SK, OSS_ROLE_ARN])
+
+
+def _sts_region() -> str:
+    """STS 用的地域 ID（去掉 oss- 前缀），如 cn-hangzhou。"""
+    return OSS_REGION[4:] if OSS_REGION.startswith("oss-") else OSS_REGION
+
+
+def _pe(s) -> str:
+    """阿里云 RPC 签名的 percent-encode（RFC3986）。"""
+    return urllib.parse.quote(str(s), safe="-_.~")
+
+
+def _assume_role(prefix: str) -> dict:
+    """调用 STS AssumeRole，返回限定在 {bucket}/{prefix}* 内可写的临时凭证。"""
+    policy = {
+        "Version": "1",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "oss:PutObject",
+                    "oss:AbortMultipartUpload",
+                    "oss:ListParts",
+                ],
+                "Resource": [f"acs:oss:*:*:{OSS_BUCKET}/{prefix}*"],
+            }
+        ],
+    }
+    params = {
+        "Action": "AssumeRole",
+        "RoleArn": OSS_ROLE_ARN,
+        "RoleSessionName": "intake-upload",
+        "DurationSeconds": str(OSS_STS_DURATION),
+        "Policy": json.dumps(policy, separators=(",", ":")),
+        "Format": "JSON",
+        "Version": "2015-04-01",
+        "AccessKeyId": OSS_AK,
+        "SignatureMethod": "HMAC-SHA1",
+        "SignatureVersion": "1.0",
+        "SignatureNonce": uuid.uuid4().hex,
+        "Timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    canonical = "&".join(f"{_pe(k)}={_pe(params[k])}" for k in sorted(params))
+    string_to_sign = "GET&%2F&" + _pe(canonical)
+    signature = base64.b64encode(
+        hmac.new((OSS_SK + "&").encode(), string_to_sign.encode(), hashlib.sha1).digest()
+    ).decode()
+    params["Signature"] = signature
+
+    url = f"https://sts.{_sts_region()}.aliyuncs.com/"
+    resp = httpx.get(url, params=params, timeout=10.0)
+    data = resp.json()
+    if resp.status_code != 200 or "Credentials" not in data:
+        raise HTTPException(
+            502, f"STS 获取临时凭证失败：{data.get('Message', resp.text)[:200]}"
+        )
+    c = data["Credentials"]
+    return {
+        "AccessKeyId": c["AccessKeyId"],
+        "AccessKeySecret": c["AccessKeySecret"],
+        "SecurityToken": c["SecurityToken"],
+        "Expiration": c["Expiration"],
+    }
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS photographers (
@@ -223,8 +314,8 @@ async def upload(
             raise HTTPException(404, "投稿会话不存在")
         sub = rows[0]
 
-        folder = f"{_safe(sub['invite_code'])}-{_safe(sub['name'])}"
-        rel_key = f"{BOOK_CODE}/{folder}/{label}/{_safe(file.filename)}"
+        prefix = _photographer_prefix(sub["invite_code"], sub["name"])
+        rel_key = f"{prefix}{label}/{_safe(file.filename)}"
         dest = INTAKE_DATA / rel_key
         dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -242,6 +333,75 @@ async def upload(
         )
         await conn.commit()
         return {"ok": True, "object_key": rel_key, "size": size}
+    finally:
+        await conn.close()
+
+
+def _photographer_prefix(invite_code: str, name: str) -> str:
+    """该摄影师在桶内的可写前缀：{book}/{投稿码-姓名}/"""
+    folder = f"{_safe(invite_code)}-{_safe(name)}"
+    return f"{BOOK_CODE}/{folder}/"
+
+
+@router.get("/api/intake/oss-config")
+async def oss_config():
+    """告诉前端当前用 OSS 直传还是本地直存（不返回任何密钥）。"""
+    if _oss_configured():
+        return {"mode": "oss", "region": OSS_REGION, "bucket": OSS_BUCKET}
+    return {"mode": "local"}
+
+
+@router.post("/api/intake/sts")
+async def sts(code: str = Form(...)):
+    """为某投稿码签发限定前缀的 OSS 临时上传凭证。"""
+    if not _oss_configured():
+        raise HTTPException(400, "未配置 OSS，当前为本地模式")
+    p = await _get_photographer(_safe(code).upper())
+    if not p:
+        raise HTTPException(404, "投稿码无效")
+    prefix = _photographer_prefix(p["invite_code"], p["name"])
+    creds = _assume_role(prefix)
+    return {
+        "ok": True,
+        "region": OSS_REGION,
+        "bucket": OSS_BUCKET,
+        "prefix": prefix,
+        "credentials": creds,
+    }
+
+
+@router.post("/api/intake/record")
+async def record(
+    submission_id: int = Form(...),
+    content_label: str = Form(...),
+    object_key: str = Form(...),
+    file_name: str = Form(...),
+    file_size: int = Form(0),
+):
+    """OSS 直传完成后登记元数据。校验 object_key 落在该摄影师前缀内。"""
+    label = _safe(content_label)
+    if not content_label.strip():
+        raise HTTPException(400, "缺少内容标注")
+    conn = await db.get_db()
+    try:
+        rows = await conn.execute_fetchall(
+            "SELECT p.invite_code, p.name FROM submissions s "
+            "JOIN photographers p ON s.photographer_id = p.id WHERE s.id = ?",
+            (submission_id,),
+        )
+        if not rows:
+            raise HTTPException(404, "投稿会话不存在")
+        prefix = _photographer_prefix(rows[0]["invite_code"], rows[0]["name"])
+        if not object_key.startswith(prefix):
+            raise HTTPException(403, "object_key 越权，不在该摄影师前缀内")
+        await conn.execute(
+            "INSERT INTO submission_files "
+            "(submission_id, content_label, object_key, file_name, file_size, "
+            " status, created_at) VALUES (?, ?, ?, ?, ?, 'done', ?)",
+            (submission_id, label, object_key, file_name, file_size, time.time()),
+        )
+        await conn.commit()
+        return {"ok": True, "object_key": object_key}
     finally:
         await conn.close()
 

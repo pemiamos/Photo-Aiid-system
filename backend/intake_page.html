@@ -101,9 +101,21 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/ali-oss@6.18.1/dist/aliyun-oss-sdk.min.js"></script>
 <script>
-  var state = { code: null, photos: [] };
+  var state = { code: null, photos: [], ossMode: null };
   var idSeq = 0;
+
+  // 启动即查询上传模式：配置了 OSS 走浏览器直传，否则经后端本地直存
+  fetch('/api/intake/oss-config').then(function(r){ return r.json(); })
+    .then(function(d){ state.ossMode = d.mode; })
+    .catch(function(){ state.ossMode = 'local'; });
+
+  // 与后端 _safe 一致的路径片段清洗
+  function safe(s){
+    s = (s || '').trim().replace(/[\\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+    return s || '未命名';
+  }
 
   var $ = function(id){ return document.getElementById(id); };
   var grid=$('grid'), selCount=$('selCount'), applyBtn=$('applyBtn'),
@@ -211,7 +223,7 @@
     submit.disabled = !ready;
   }
 
-  // ---- 提交：创建会话 → 逐张上传（带进度）→ 完成 ----
+  // ---- 提交：创建会话 →（OSS 直传 or 本地上传）→ 完成 ----
   submit.addEventListener('click', function(){
     if(submit.disabled) return;
     submit.disabled = true; submit.textContent = '上传中…';
@@ -221,7 +233,11 @@
     fd.append('license_agreed', '1');
     fetch('/api/intake/submit', { method:'POST', body:fd })
       .then(function(r){ return r.json(); })
-      .then(function(d){ return uploadAll(d.submission_id); })
+      .then(function(d){
+        var sid = d.submission_id;
+        var prep = state.ossMode === 'oss' ? prepareOss() : Promise.resolve(null);
+        return prep.then(function(oss){ return uploadAll(sid, oss); });
+      })
       .then(function(sid){
         var fd2 = new FormData(); fd2.append('submission_id', sid);
         return fetch('/api/intake/complete', { method:'POST', body:fd2 });
@@ -230,19 +246,67 @@
         setSubmit(false, '✓ 投稿成功，共 '+state.photos.length+' 张');
         submit.style.color = 'var(--ok)';
       })
-      .catch(function(){ setSubmit(true, '上传失败，点击重试'); });
+      .catch(function(err){ setSubmit(true, (err && err.message || '上传失败')+'，点击重试'); });
   });
 
-  function uploadAll(sid){
+  // 取临时凭证并创建 OSS 客户端（凭证将过期时自动续签）
+  function prepareOss(){
+    var fd = new FormData(); fd.append('code', state.code);
+    return fetch('/api/intake/sts', { method:'POST', body:fd })
+      .then(function(r){ if(!r.ok) throw new Error('获取上传凭证失败'); return r.json(); })
+      .then(function(s){
+        var client = new OSS({
+          region: s.region,
+          bucket: s.bucket,
+          accessKeyId: s.credentials.AccessKeyId,
+          accessKeySecret: s.credentials.AccessKeySecret,
+          stsToken: s.credentials.SecurityToken,
+          secure: true,
+          refreshSTSToken: function(){
+            var f = new FormData(); f.append('code', state.code);
+            return fetch('/api/intake/sts', { method:'POST', body:f })
+              .then(function(r){ return r.json(); })
+              .then(function(s2){ return {
+                accessKeyId: s2.credentials.AccessKeyId,
+                accessKeySecret: s2.credentials.AccessKeySecret,
+                stsToken: s2.credentials.SecurityToken }; });
+          }
+        });
+        return { client: client, prefix: s.prefix };
+      });
+  }
+
+  function uploadAll(sid, oss){
     var queue = state.photos.slice();
     function next(i){
       if(i>=queue.length) return Promise.resolve(sid);
-      return uploadOne(sid, queue[i]).then(function(){ return next(i+1); });
+      var up = oss ? uploadToOss(sid, queue[i], oss) : uploadLocal(sid, queue[i]);
+      return up.then(function(){ return next(i+1); });
     }
     return next(0);
   }
 
-  function uploadOne(sid, p){
+  // OSS 浏览器直传（分片 + 断点续传），完成后回后端登记元数据
+  function uploadToOss(sid, p, oss){
+    var key = oss.prefix + safe(p.label) + '/' + safe(p.file.name);
+    return oss.client.multipartUpload(key, p.file, {
+      parallel: 4,
+      partSize: 1024 * 1024,
+      progress: function(percent){ p.progress = Math.round(percent * 100); render(); }
+    }).then(function(){
+      p.progress = 100; render();
+      var fd = new FormData();
+      fd.append('submission_id', sid);
+      fd.append('content_label', p.label);
+      fd.append('object_key', key);
+      fd.append('file_name', p.file.name);
+      fd.append('file_size', p.file.size);
+      return fetch('/api/intake/record', { method:'POST', body:fd });
+    });
+  }
+
+  // 本地模式：文件经后端落盘（原型 / 未配置 OSS 时）
+  function uploadLocal(sid, p){
     return new Promise(function(resolve, reject){
       var fd = new FormData();
       fd.append('submission_id', sid);
@@ -253,8 +317,8 @@
       xhr.upload.onprogress = function(e){
         if(e.lengthComputable){ p.progress = Math.round(e.loaded/e.total*100); render(); }
       };
-      xhr.onload = function(){ p.progress=100; render(); xhr.status<300 ? resolve() : reject(); };
-      xhr.onerror = reject;
+      xhr.onload = function(){ p.progress=100; render(); xhr.status<300 ? resolve() : reject(new Error('上传失败')); };
+      xhr.onerror = function(){ reject(new Error('网络错误')); };
       xhr.send(fd);
     });
   }
