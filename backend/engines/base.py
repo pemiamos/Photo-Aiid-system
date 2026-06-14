@@ -14,6 +14,7 @@ class AnalysisResult:
     description: str = ""
     slug: str = ""
     location: str = ""
+    place_in_name: str = ""  # 文件名/文件夹中明确写出的地名原文
     photographer: str = ""
     engine: str = ""
     raw_response: str = ""

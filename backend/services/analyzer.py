@@ -40,6 +40,8 @@ _batch_active = False
 # Pause/resume control. Event is "set" while running, "clear" while paused.
 _pause_event = asyncio.Event()
 _pause_event.set()
+# Cancel control. "set" => a cancel has been requested for the current batch.
+_cancel_event = asyncio.Event()
 # Accumulators for active-time accounting (excludes paused spans).
 _active_start = 0.0       # wall-clock time the current active span began
 _active_accum = 0.0       # total active seconds accumulated before current span
@@ -63,6 +65,18 @@ def resume_analysis() -> dict:
     global _active_start
     if not _pause_event.is_set():
         _active_start = time.time()
+        _pause_event.set()
+        analysis_progress["paused"] = False
+    return get_analysis_progress()
+
+
+def cancel_analysis() -> dict:
+    """Request cancellation of the running batch. Takes effect before the next
+    photo; the in-flight photo finishes. Also unblocks a paused batch so its
+    workers can observe the cancel and exit."""
+    if analysis_progress.get("running"):
+        _cancel_event.set()
+        # Unblock any paused workers so they reach the cancel check and stop.
         _pause_event.set()
         analysis_progress["paused"] = False
     return get_analysis_progress()
@@ -188,9 +202,13 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
                 extra_context=extra_context,
             )
 
-            # Prefer precise GPS location; fall back to AI-inferred location.
-            # Normalize: drop country/province, join levels with '-'.
-            final_location = geocode.normalize_location(gps_location or result.location)
+            # Location priority: an explicit place name written in the
+            # filename/folder wins (the user's own ground truth, e.g. 石臼湖),
+            # then precise GPS, then AI-inferred. Normalize: drop
+            # country/province, join levels with '-'.
+            final_location = geocode.normalize_location(
+                result.place_in_name or gps_location or result.location
+            )
 
             # Photographer: prefer the model's field, fall back to a filename/
             # folder heuristic so a name is never silently dropped.
@@ -243,8 +261,9 @@ async def analyze_batch(
         logger.warning("Analysis batch already active; ignoring duplicate request")
         return
     _batch_active = True
-    # Reset pause/timing state for the new batch.
+    # Reset pause/cancel/timing state for the new batch.
     _pause_event.set()
+    _cancel_event.clear()
     _active_start = time.time()
     _active_accum = 0.0
 
@@ -289,8 +308,14 @@ async def analyze_batch(
 
         async def worker():
             while not queue.empty():
+                # Stop pulling new work once a cancel has been requested.
+                if _cancel_event.is_set():
+                    break
                 # Block here while paused (takes effect before each photo).
                 await _pause_event.wait()
+                # Re-check after unblocking: a cancel sets _pause_event to wake us.
+                if _cancel_event.is_set():
+                    break
                 try:
                     photo_id = queue.get_nowait()
                 except asyncio.QueueEmpty:
@@ -316,6 +341,8 @@ async def analyze_batch(
     finally:
         analysis_progress["running"] = False
         analysis_progress["current_file"] = ""
+        analysis_progress["cancelled"] = _cancel_event.is_set()
+        _cancel_event.clear()
         _batch_active = False
 
 

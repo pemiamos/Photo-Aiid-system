@@ -41,6 +41,15 @@ const ENGINES = [
   { value: 'clip',   label: 'CLIP 本地' },
 ]
 
+// Ollama 本地视觉模型预设选项
+const OLLAMA_MODELS = [
+  'qwen2.5vl:72b',
+  'qwen2.5vl:7b',
+  'qwen2.5vl:3b',
+  'gemma3:12b',
+  'llava:13b',
+]
+
 export default function Sidebar() {
   const state = usePhotoStore()
   const dispatch = usePhotoDispatch()
@@ -49,7 +58,26 @@ export default function Sidebar() {
   const [testResult, setTestResult] = useState(null)
   const [scanning, setScanning] = useState(false)
   const [customChip, setCustomChip] = useState('')
+  const [ollamaModels, setOllamaModels] = useState(null) // null=未扫描, []=扫描失败/无
+  const [ollamaCustom, setOllamaCustom] = useState(false) // 是否手动输入模型名
+  const [cancelling, setCancelling] = useState(false)     // 已发出取消请求，等待批次结束
   const dragIdx = useRef(null)
+
+  // 扫描 Ollama 本机已安装模型，填充视觉模型下拉
+  useEffect(() => {
+    if (settings.engine !== 'ollama' || !settings.ollamaUrl) return
+    let cancelled = false
+    const url = settings.ollamaUrl.replace(/\/+$/, '') + '/api/tags'
+    fetch(url)
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return
+        const names = (data?.models || []).map(m => m.name).filter(Boolean)
+        setOllamaModels(names)
+      })
+      .catch(() => { if (!cancelled) setOllamaModels([]) })
+    return () => { cancelled = true }
+  }, [settings.engine, settings.ollamaUrl])
 
   // Rename template as an ordered list of "_"-joined chips.
   const templateChips = (settings.template || '').split('_').filter(Boolean)
@@ -366,20 +394,15 @@ export default function Sidebar() {
     await runAnalysis(targets.map(p => p.id))
   }, [folderPhotos, runAnalysis])
 
-  /* ── 自选分析：仅分析用户点选的照片中尚未分析（待分析/失败）的 ── */
+  /* ── 自选分析：强制重新分析用户点选的全部照片（含已分析完成的） ── */
   const handleAnalyzeSelected = useCallback(async () => {
     if (selectedIds.length === 0) {
       alert("请先在画廊中点选要分析的照片，再点「自选分析」。")
       return
     }
     const selectedSet = new Set(selectedIds)
-    const targets = folderPhotos.filter(
-      p => selectedSet.has(p.id) && (p.scan_status === 'queued' || p.scan_status === 'error')
-    )
-    if (targets.length === 0) {
-      alert("选中的照片均已分析完成，无需重复分析。")
-      return
-    }
+    const targets = folderPhotos.filter(p => selectedSet.has(p.id))
+    if (targets.length === 0) return
     await runAnalysis(targets.map(p => p.id))
   }, [selectedIds, folderPhotos, runAnalysis])
 
@@ -388,6 +411,22 @@ export default function Sidebar() {
     dispatch({ type: Actions.CLEAR_ALL })
     setTestResult(null)
   }, [dispatch])
+
+  /* ── cancel running analysis ── */
+  const handleCancel = useCallback(async () => {
+    setCancelling(true)
+    try {
+      await api.cancelAnalysis()
+    } catch (err) {
+      dispatch({ type: Actions.SET_ERROR, payload: err.message })
+      setCancelling(false)
+    }
+  }, [dispatch])
+
+  // Clear the "cancelling" flag once the batch is no longer running.
+  useEffect(() => {
+    if (engineStatus !== 'busy') setCancelling(false)
+  }, [engineStatus])
 
   /* ── test connection ── */
   const handleTest = useCallback(async () => {
@@ -550,12 +589,45 @@ export default function Sidebar() {
               value={settings.ollamaUrl}
               onChange={e => updateSetting('ollamaUrl', e.target.value)}
             />
-            <label className="sidebar-field">视觉模型</label>
-            <input
-              type="text"
-              value={settings.ollamaModel}
-              onChange={e => updateSetting('ollamaModel', e.target.value)}
-            />
+            <label className="sidebar-field">
+              视觉模型
+              {ollamaModels === null
+                ? <span className="sidebar-hint" style={{marginLeft:8}}>扫描中…</span>
+                : <span className="sidebar-hint" style={{marginLeft:8}}>已安装 {ollamaModels.length} 个</span>}
+            </label>
+            {(() => {
+              const installed = ollamaModels && ollamaModels.length ? ollamaModels : OLLAMA_MODELS
+              const isCustom = ollamaCustom || !installed.includes(settings.ollamaModel)
+              return (
+                <>
+                  <select
+                    value={isCustom ? '__custom__' : settings.ollamaModel}
+                    onChange={e => {
+                      if (e.target.value === '__custom__') {
+                        setOllamaCustom(true)
+                      } else {
+                        setOllamaCustom(false)
+                        updateSetting('ollamaModel', e.target.value)
+                      }
+                    }}
+                  >
+                    {installed.map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    <option value="__custom__">自定义…</option>
+                  </select>
+                  {isCustom && (
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder="输入模型名，如 qwen2.5vl:7b"
+                      value={settings.ollamaModel}
+                      onChange={e => updateSetting('ollamaModel', e.target.value)}
+                    />
+                  )}
+                </>
+              )
+            })()}
             <div className="sidebar-hint">
               需先允许浏览器跨域访问 Ollama：
               <br />launchctl setenv OLLAMA_ORIGINS "*"
@@ -679,13 +751,24 @@ export default function Sidebar() {
             ? '分析中…'
             : `自选分析${selectedIds.length ? ` (${selectedIds.length})` : ''}`}
         </button>
-        <button
-          className="btn ghost"
-          onClick={handleClear}
-          disabled={folderPhotos.length === 0}
-        >
-          清空
-        </button>
+        {engineStatus === 'busy' ? (
+          <button
+            className="btn danger"
+            onClick={handleCancel}
+            disabled={cancelling}
+            title="中断并取消正在进行的 AI 分析"
+          >
+            {cancelling ? '正在取消…' : '取消任务'}
+          </button>
+        ) : (
+          <button
+            className="btn ghost"
+            onClick={handleClear}
+            disabled={folderPhotos.length === 0}
+          >
+            清空
+          </button>
+        )}
         <button className="btn ghost" onClick={handleTest}>
           测试连接
         </button>

@@ -246,6 +246,14 @@
   display: block;
   background: #000;
   min-height: 60px;
+  /* 让卡片的拖拽（复制原图）接管，禁用 img 自身的原生拖拽 */
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* 提示缩略图可拖拽到桌面/文件夹复制原图 */
+.photo-card:not(.editing):active {
+  cursor: grabbing;
 }
 
 .card-status {
@@ -269,11 +277,25 @@
 }
 
 .card-fname {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--muted);
+}
+
+.card-fname-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-category {
+  flex: none;
+  color: var(--ok);
   white-space: nowrap;
 }
 
@@ -310,9 +332,26 @@
 }
 
 .card-location {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 11px;
   color: var(--amber);
   margin: 4px 0 6px;
+}
+
+.card-loc-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-specs {
+  flex: none;
+  font-family: var(--mono);
+  color: var(--faint);
 }
 
 /* ── inline / batch editor ── */

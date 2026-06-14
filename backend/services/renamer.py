@@ -58,6 +58,39 @@ def format_date(date_str: str | None) -> str:
     return ""
 
 
+def location_from_filename(file_name: str) -> str:
+    """Extract the location from the original filename.
+
+    The location is the segment right after the photographer. Two original
+    conventions are supported:
+
+    * underscore form ``摄影师_地点_标签_日期`` → second ``_`` segment
+      (the location may carry a ``-`` for sub-levels, e.g. ``上海市-静安区``、
+      ``无锡-太湖``);
+    * hyphen form ``摄影师-地点 （序号)`` → the part after the first ``-``
+      (e.g. ``戴频-石臼湖 （12).jpg`` → ``石臼湖``).
+
+    A trailing sequence marker like ``（12)`` / ``(12)`` is stripped first, and
+    pure date/number segments are rejected so a malformed name falls back
+    cleanly.
+    """
+    if not file_name:
+        return ""
+    stem = Path(file_name).stem
+    # 去掉末尾的序号标记，如 「 （12)」「(12)」
+    stem = re.sub(r"[\s_\-]*[（(]\s*\d+\s*[)）]\s*$", "", stem).strip()
+    if "_" in stem:
+        parts = stem.split("_")
+        cand = parts[1].strip() if len(parts) >= 2 else ""
+    else:
+        # 摄影师-地点 结构：取第一个连字符之后的部分
+        segs = re.split(r"[-—–]", stem, maxsplit=1)
+        cand = segs[1].strip() if len(segs) >= 2 else ""
+    if cand and not re.fullmatch(r"\d{6,8}(-\d+)?", cand):
+        return cand
+    return ""
+
+
 _TOKEN_RE = re.compile(r"\[[^\[\]]+\]")
 
 
@@ -141,15 +174,39 @@ async def compute_renames(
                 exif_date = ""
 
         tags = ai.get("tags") or []
+        photographer = ai.get("photographer", "") or ""
+        category = ai.get("category", "") or ""
+        # 地点：优先用原文件名解析出的地点，回退到 AI/GPS 地点
+        location = location_from_filename(photo["file_name"]) or (
+            ai.get("location", "") or ""
+        )
+
+        def _is_dup(tag: str) -> bool:
+            """标签与摄影师或地点内容重复（互相包含）则视为重复。"""
+            if not tag:
+                return True
+            for ref in (photographer, location):
+                if ref and (tag in ref or ref in tag):
+                    return True
+            return False
+
+        # 优先选用不与摄影师/地点重复的标签；全部重复则回退原始顺序
+        distinct_tags = [t for t in tags if not _is_dup(t)] or tags
+
+        # 类别若与摄影师/地点重复，则用首个不重复标签替代
+        category_value = category
+        if category and _is_dup(category):
+            category_value = distinct_tags[0] if distinct_tags else category
+
         # Token → value map (empty values are dropped cleanly by render_template)
         fields = {
             "[前缀]": prefix,
-            "[摄影师]": ai.get("photographer", ""),
-            "[类别]": ai.get("category", ""),
-            "[AI标签]": ai.get("category", ""),     # backward-compat alias
-            "[标签]": tags[0] if tags else "",
-            "[标签2]": "".join(tags[:2]),
-            "[地点]": ai.get("location", ""),
+            "[摄影师]": photographer,
+            "[类别]": category_value,
+            "[AI标签]": category_value,     # backward-compat alias
+            "[标签]": distinct_tags[0] if distinct_tags else "",
+            "[标签2]": "".join(distinct_tags[:2]),
+            "[地点]": location,
             "[日期]": exif_date,
             "[相机]": exif.get("camera_model", "") or "",
             "[序号]": str(seq).zfill(3),

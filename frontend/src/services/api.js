@@ -6,6 +6,25 @@
 const BASE = '/api'
 
 /* ── helpers ── */
+// FastAPI `detail` may be a string, an object, or an array of validation-error
+// objects ({loc, msg, type}). Flatten any of these into readable text so the UI
+// never shows "[object Object]".
+function formatDetail(detail) {
+  if (!detail) return ''
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map(d => {
+        if (typeof d === 'string') return d
+        const loc = Array.isArray(d.loc) ? d.loc.join('.') : d.loc
+        return [loc, d.msg].filter(Boolean).join(': ')
+      })
+      .join('; ')
+  }
+  if (typeof detail === 'object') return detail.msg || JSON.stringify(detail)
+  return String(detail)
+}
+
 async function request(path, options = {}) {
   const url = `${BASE}${path}`
   const config = {
@@ -20,7 +39,7 @@ async function request(path, options = {}) {
       let msg
       try {
         const json = JSON.parse(body)
-        msg = json.detail || json.message || json.error || body
+        msg = formatDetail(json.detail) || json.message || json.error || body
       } catch {
         msg = body
       }
@@ -72,6 +91,13 @@ export async function getPhotoById(id) {
   return request(`/photos/${id}`)
 }
 
+// Absolute URL of a photo's full-resolution original. Used by the gallery's
+// drag-to-desktop feature (the browser's DownloadURL mechanism needs an
+// absolute URL).
+export function originalUrl(id) {
+  return `${window.location.origin}${BASE}/originals/${id}`
+}
+
 /* ── Analysis ── */
 export async function analyzePhotos(options = {}) {
   return request('/analyze', {
@@ -110,9 +136,20 @@ export async function resumeAnalysis() {
   return request('/analyze/resume', { method: 'POST' })
 }
 
+export async function cancelAnalysis() {
+  return request('/analyze/cancel', { method: 'POST' })
+}
+
 /* ── Rename ── */
 export async function renamePhotos(options = {}) {
   return request('/rename', {
+    method: 'POST',
+    body: JSON.stringify(options),
+  })
+}
+
+export async function renamePreview(options = {}) {
+  return request('/rename/preview', {
     method: 'POST',
     body: JSON.stringify(options),
   })

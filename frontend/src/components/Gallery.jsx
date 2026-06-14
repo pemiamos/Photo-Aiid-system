@@ -1,9 +1,9 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { usePhotoStore, usePhotoDispatch, Actions } from '../stores/photoStore'
 import * as api from '../services/api'
 import './Gallery.css'
 
-function PhotoCard({ photo, index, selected, onToggle }) {
+function PhotoCard({ photo, index, selected, onToggle, suggestedName }) {
   const dispatch = usePhotoDispatch()
   const ai = photo.ai || {}
   const [editing, setEditing] = useState(false)
@@ -53,11 +53,43 @@ function PhotoCard({ photo, index, selected, onToggle }) {
   const statusLabel = { queued: '待分析', analyzing: '识别中…', error: '失败', done: '' }
   const statusClass = photo.scan_status || 'queued'
 
+  // 原图规格：像素尺寸 + 文件大小，显示在第 3 行右侧。
+  const fmtBytes = (b) => {
+    if (!b) return ''
+    if (b >= 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`
+    if (b >= 1024) return `${Math.round(b / 1024)} KB`
+    return `${b} B`
+  }
+  const dims = photo.width && photo.height ? `${photo.width}×${photo.height}` : ''
+  const specs = [dims, fmtBytes(photo.file_size)].filter(Boolean).join(' · ')
+
+  // 拖拽到桌面/文件夹时复制原图；已分析则用建议新名（suggestedName 含扩展名），
+  // 未分析则用原文件名。依赖 Chromium 的 DownloadURL 机制。
+  const MIME_BY_EXT = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+    gif: 'image/gif', webp: 'image/webp', tif: 'image/tiff',
+    tiff: 'image/tiff', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif',
+  }
+  const handleDragStart = (e) => {
+    if (editing) return
+    const downloadName = suggestedName || photo.file_name
+    const ext = (downloadName.split('.').pop() || '').toLowerCase()
+    const mime = MIME_BY_EXT[ext] || 'application/octet-stream'
+    const url = api.originalUrl(photo.id)
+    // DownloadURL 让浏览器把拖出的内容保存为文件（Chrome / Edge 支持）。
+    e.dataTransfer.setData('DownloadURL', `${mime}:${downloadName}:${url}`)
+    e.dataTransfer.setData('text/uri-list', url)
+    e.dataTransfer.setData('text/plain', url)
+    e.dataTransfer.effectAllowed = 'copy'
+  }
+
   return (
     <div
       className={`photo-card${selected ? ' selected' : ''}${editing ? ' editing' : ''}`}
+      draggable={!editing}
+      onDragStart={handleDragStart}
       onClick={() => { if (!editing) onToggle(photo.id) }}
-      title={editing ? '' : '点击选中 / 取消，用于「自选分析」'}
+      title={editing ? '' : '点击选中 / 取消，用于「自选分析」；拖到文件夹或桌面可复制原图'}
     >
       <div className="card-edge">
         <span>{frame}</span>
@@ -79,15 +111,25 @@ function PhotoCard({ photo, index, selected, onToggle }) {
       </div>
       <div className="card-meta">
         <div className="card-fname">
-          {photo.file_name}
+          <span className="card-fname-name">
+            {photo.file_name}
+            {ai.category && !editing && (
+              <button className="card-edit-btn" onClick={startEdit} title="编辑描述/标签">✏️</button>
+            )}
+          </span>
           {ai.category && !editing && (
-            <button className="card-edit-btn" onClick={startEdit} title="编辑描述/标签">✏️</button>
+            <span className="card-category">{ai.category}</span>
           )}
         </div>
         {ai.category && !editing && (
           <>
-            <div className="card-newname">→ {photo.suggested_name || ai.category}</div>
-            {ai.location && <div className="card-location">📍 {ai.location}</div>}
+            <div className="card-newname">→ {suggestedName || '（拟重命名生成中…）'}</div>
+            {(ai.location || specs) && (
+              <div className="card-location">
+                <span className="card-loc-text">{ai.location ? `📍 ${ai.location}` : ''}</span>
+                {specs && <span className="card-specs">{specs}</span>}
+              </div>
+            )}
             <div className="card-tags">
               {[ai.category, ...(ai.tags || [])].map((t, i) => (
                 <span key={i} className="card-tag">{t}</span>
@@ -176,6 +218,28 @@ export default function Gallery() {
     }
     return list
   }, [photos, settings?.folderPath, activeTag, searchQuery, localQuery])
+
+  // 拉取每张照片的「拟重命名」预览（后端按当前模板/前缀计算，含去重与地名优先逻辑）
+  const [previewMap, setPreviewMap] = useState({})
+  const doneIds = useMemo(
+    () => filteredPhotos.filter(p => p.ai).map(p => p.id),
+    [filteredPhotos]
+  )
+  const previewKey = `${doneIds.join(',')}|${settings?.template || ''}|${settings?.prefix || ''}`
+  useEffect(() => {
+    if (doneIds.length === 0) { setPreviewMap({}); return }
+    let cancelled = false
+    api.renamePreview({ photo_ids: doneIds })
+      .then(data => {
+        if (cancelled || !data?.entries) return
+        const m = {}
+        for (const e of data.entries) m[e.photo_id] = e.new_name
+        setPreviewMap(m)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewKey])
 
   const handleSearch = (e) => {
     setLocalQuery(e.target.value)
@@ -316,6 +380,7 @@ export default function Gallery() {
               index={i}
               selected={selectedIds.includes(photo.id)}
               onToggle={toggleSelect}
+              suggestedName={previewMap[photo.id]}
             />
           ))}
         </div>

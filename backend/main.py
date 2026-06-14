@@ -281,6 +281,32 @@ async def get_thumbnail(photo_id: int):
     raise HTTPException(status_code=404, detail="缩略图未找到")
 
 
+@app.get("/api/originals/{photo_id}")
+async def get_original(photo_id: int):
+    """Serve the full-resolution original file as a download.
+
+    Used by the gallery's drag-to-desktop feature: dragging a thumbnail to a
+    folder/Desktop pulls the original here. If the photo has been analyzed, the
+    download is named with the AI-suggested new filename; otherwise it keeps the
+    original name.
+    """
+    photo = await db.get_photo(photo_id)
+    if not photo:
+        raise HTTPException(status_code=404, detail="照片不存在")
+
+    src = photo["file_path"]
+    if not os.path.exists(src):
+        raise HTTPException(status_code=404, detail="原始文件不存在")
+
+    download_name = photo["file_name"]
+    if photo.get("ai"):
+        entries = await renamer.compute_renames(photo_ids=[photo_id])
+        if entries:
+            download_name = entries[0].new_name
+
+    return FileResponse(src, filename=download_name)
+
+
 # ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
@@ -311,6 +337,11 @@ async def analyze_pause():
 @app.post("/api/analyze/resume")
 async def analyze_resume():
     return analyzer.resume_analysis()
+
+
+@app.post("/api/analyze/cancel")
+async def analyze_cancel():
+    return analyzer.cancel_analysis()
 
 
 @app.post("/api/analyze/{photo_id}")
