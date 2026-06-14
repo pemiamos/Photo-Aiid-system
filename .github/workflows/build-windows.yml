@@ -16,9 +16,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: 升级 npm（避免旧版 npm 处理 rollup 平台依赖时的 Invalid Version 报错）
-        run: npm install -g npm@latest
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -27,8 +24,11 @@ jobs:
 
       - name: 构建前端 (vite build)
         working-directory: frontend
+        # 删除 macOS 上生成的 package-lock.json 改用 npm install，
+        # 规避 npm ci 在 Windows 上解析 rollup 平台可选依赖时的 Invalid Version bug。
         run: |
-          npm ci
+          Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
+          npm install
           npm run build
 
       - name: 创建打包虚环境并安装依赖
@@ -52,7 +52,9 @@ jobs:
           Copy-Item -Recurse -Force backend\dist\photo-aiid-backend\* src-tauri\resources\backend\
 
       - name: 安装 Tauri CLI
-        run: npm ci
+        run: |
+          Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue
+          npm install
 
       - name: 编译 Tauri App (NSIS / MSI)
         run: npx tauri build
