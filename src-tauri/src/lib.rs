@@ -19,14 +19,20 @@ const PORT: u16 = 8000;
 // 持有后端子进程句柄，退出时统一清理。
 struct BackendProcess(Mutex<Option<Child>>);
 
+/// 后端可执行文件名（Windows 下带 .exe 后缀）。
+#[cfg(target_os = "windows")]
+const BACKEND_EXE: &str = "photo-aiid-backend.exe";
+#[cfg(not(target_os = "windows"))]
+const BACKEND_EXE: &str = "photo-aiid-backend";
+
 /// 解析后端可执行文件路径：优先用打包资源，开发期回退到本地 freeze 产物。
 fn backend_executable(app: &tauri::App) -> Option<std::path::PathBuf> {
-    // 打包后：<Resources>/resources/backend/photo-aiid-backend
+    // 打包后：<Resources>/resources/backend/photo-aiid-backend(.exe)
     if let Ok(res_dir) = app.path().resource_dir() {
         let bundled = res_dir
             .join("resources")
             .join("backend")
-            .join("photo-aiid-backend");
+            .join(BACKEND_EXE);
         if bundled.exists() {
             return Some(bundled);
         }
@@ -34,7 +40,8 @@ fn backend_executable(app: &tauri::App) -> Option<std::path::PathBuf> {
     // 开发期回退：仓库内 PyInstaller 产物
     let dev = std::env::current_dir()
         .ok()?
-        .join("../backend/dist/photo-aiid-backend/photo-aiid-backend");
+        .join("../backend/dist/photo-aiid-backend")
+        .join(BACKEND_EXE);
     if dev.exists() {
         return Some(dev);
     }

@@ -1,0 +1,63 @@
+name: Build Windows App
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 构建前端 (vite build)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: 创建打包虚环境并安装依赖
+        working-directory: backend
+        run: |
+          python -m venv .venv-build
+          .venv-build\Scripts\pip install -U pip
+          .venv-build\Scripts\pip install -r requirements.txt
+          .venv-build\Scripts\pip install pyinstaller
+
+      - name: 冻结 Python 后端 (PyInstaller)
+        working-directory: backend
+        run: |
+          Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
+          .venv-build\Scripts\pyinstaller photo_aiid_backend.spec --noconfirm
+
+      - name: 拷贝后端到 Tauri 资源目录
+        run: |
+          Remove-Item -Recurse -Force src-tauri\resources\backend -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path src-tauri\resources\backend | Out-Null
+          Copy-Item -Recurse -Force backend\dist\photo-aiid-backend\* src-tauri\resources\backend\
+
+      - name: 安装 Tauri CLI
+        run: npm ci
+
+      - name: 编译 Tauri App (NSIS / MSI)
+        run: npx tauri build
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: photo-aiid-windows
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
