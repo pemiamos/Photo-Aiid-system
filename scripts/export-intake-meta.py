@@ -29,6 +29,7 @@ def main():
         """
         SELECT p.invite_code, p.name, p.contact,
                sf.content_label, sf.file_name, sf.object_key, sf.file_size,
+               sf.photographer, sf.location, sf.category, sf.description, sf.tags,
                s.license_at, sf.created_at
         FROM submission_files sf
         JOIN submissions s   ON sf.submission_id = s.id
@@ -47,12 +48,16 @@ def main():
     w = csv.writer(out)
     w.writerow(
         ["投稿码", "姓名", "联系方式", "内容标注", "文件名",
+         "摄影师", "地点", "类别", "描述", "标签",
          "object_key", "大小(字节)", "授权时间", "上传时间"]
     )
     for r in rows:
         w.writerow(
             [r["invite_code"], r["name"], r["contact"] or "", r["content_label"],
-             r["file_name"], r["object_key"], r["file_size"],
+             r["file_name"],
+             r["photographer"] or "", r["location"] or "", r["category"] or "",
+             r["description"] or "", r["tags"] or "",
+             r["object_key"], r["file_size"],
              ts(r["license_at"]), ts(r["created_at"])]
         )
     if out is not sys.stdout:

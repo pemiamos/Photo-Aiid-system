@@ -179,10 +179,18 @@ CREATE TABLE IF NOT EXISTS submission_files (
     object_key    TEXT NOT NULL,
     file_name     TEXT NOT NULL,
     file_size     INTEGER NOT NULL DEFAULT 0,
+    photographer  TEXT,              -- 摄影师（来自 App 本地 AI 索引）
+    location      TEXT,              -- 地点
+    category      TEXT,              -- 类别
+    description   TEXT,              -- 描述
+    tags          TEXT,              -- 标签（JSON 字符串）
     status        TEXT NOT NULL DEFAULT 'done',
     created_at    REAL NOT NULL
 );
 """
+
+# 提交时随照片一起上传的本地 AI 索引字段（App 投稿模式用；网页留空）
+_META_COLUMNS = ("photographer", "location", "category", "description", "tags")
 
 
 async def init_intake_db():
@@ -190,6 +198,14 @@ async def init_intake_db():
     conn = await db.get_db()
     try:
         await conn.executescript(_SCHEMA)
+        # 老库迁移：为已存在的 submission_files 补上索引字段
+        cols = await conn.execute_fetchall("PRAGMA table_info(submission_files)")
+        existing = {c["name"] for c in cols}
+        for col in _META_COLUMNS:
+            if col not in existing:
+                await conn.execute(
+                    f"ALTER TABLE submission_files ADD COLUMN {col} TEXT"
+                )
         # demo 种子：A03 王芳 故意不投稿，用于看板展示「未交」
         seed = [
             ("A01", "张伟", "13800000001"),
@@ -316,11 +332,35 @@ async def submit(code: str = Form(...), license_agreed: int = Form(0)):
         await conn.close()
 
 
+async def _insert_file(conn, submission_id, label, object_key, file_name, size, meta):
+    """写入一条照片记录，含可选的本地 AI 索引字段。"""
+    await conn.execute(
+        "INSERT INTO submission_files "
+        "(submission_id, content_label, object_key, file_name, file_size, "
+        " photographer, location, category, description, tags, status, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'done', ?)",
+        (
+            submission_id, label, object_key, file_name, size,
+            meta.get("photographer") or None,
+            meta.get("location") or None,
+            meta.get("category") or None,
+            meta.get("description") or None,
+            meta.get("tags") or None,
+            time.time(),
+        ),
+    )
+
+
 @router.post("/api/intake/upload")
 async def upload(
     submission_id: int = Form(...),
     content_label: str = Form(...),
     file: UploadFile = File(...),
+    photographer: str = Form(""),
+    location: str = Form(""),
+    category: str = Form(""),
+    description: str = Form(""),
+    tags: str = Form(""),
 ):
     """上传单张照片（原型：经后端落本地，结构同 OSS key）。"""
     label = _safe(content_label)
@@ -349,11 +389,10 @@ async def upload(
                 f.write(chunk)
                 size += len(chunk)
 
-        await conn.execute(
-            "INSERT INTO submission_files "
-            "(submission_id, content_label, object_key, file_name, file_size, "
-            " status, created_at) VALUES (?, ?, ?, ?, ?, 'done', ?)",
-            (submission_id, label, rel_key, file.filename, size, time.time()),
+        await _insert_file(
+            conn, submission_id, label, rel_key, file.filename, size,
+            {"photographer": photographer, "location": location,
+             "category": category, "description": description, "tags": tags},
         )
         await conn.commit()
         return {"ok": True, "object_key": rel_key, "size": size}
@@ -401,6 +440,11 @@ async def record(
     object_key: str = Form(...),
     file_name: str = Form(...),
     file_size: int = Form(0),
+    photographer: str = Form(""),
+    location: str = Form(""),
+    category: str = Form(""),
+    description: str = Form(""),
+    tags: str = Form(""),
 ):
     """OSS 直传完成后登记元数据。校验 object_key 落在该摄影师前缀内。"""
     label = _safe(content_label)
@@ -418,11 +462,10 @@ async def record(
         prefix = _photographer_prefix(rows[0]["invite_code"], rows[0]["name"])
         if not object_key.startswith(prefix):
             raise HTTPException(403, "object_key 越权，不在该摄影师前缀内")
-        await conn.execute(
-            "INSERT INTO submission_files "
-            "(submission_id, content_label, object_key, file_name, file_size, "
-            " status, created_at) VALUES (?, ?, ?, ?, ?, 'done', ?)",
-            (submission_id, label, object_key, file_name, file_size, time.time()),
+        await _insert_file(
+            conn, submission_id, label, object_key, file_name, file_size,
+            {"photographer": photographer, "location": location,
+             "category": category, "description": description, "tags": tags},
         )
         await conn.commit()
         return {"ok": True, "object_key": object_key}
