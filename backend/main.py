@@ -19,6 +19,27 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+
+# ---------------------------------------------------------------------------
+# 加载 .env（KEY=VALUE）到环境变量。必须在 import intake 之前执行，
+# 因为 intake.py 在模块顶层读取 OSS_* 等配置。无第三方依赖；
+# 用 setdefault，使真实环境变量（export）优先于 .env 文件。
+# ---------------------------------------------------------------------------
+def _load_dotenv() -> None:
+    here = Path(__file__).resolve().parent
+    for envfile in (here.parent / ".env", here / ".env"):
+        if not envfile.is_file():
+            continue
+        for raw in envfile.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 import database as db
 import intake
 from engines import get_engine, list_engines

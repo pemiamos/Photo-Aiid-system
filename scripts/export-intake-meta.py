@@ -25,11 +25,20 @@ def main():
 
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
+
+    # 自适应：App 投稿模式带来的本地 AI 索引列（photographer/location/...）
+    # 只在后端迁移过的库里存在；旧库缺这些列时退化为空字符串，避免查询报错。
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(submission_files)")}
+    optional = ("photographer", "location", "category", "description", "tags")
+    sel_optional = ", ".join(
+        f"sf.{c}" if c in existing else f"'' AS {c}" for c in optional
+    )
+
     rows = conn.execute(
-        """
+        f"""
         SELECT p.invite_code, p.name, p.contact,
                sf.content_label, sf.file_name, sf.object_key, sf.file_size,
-               sf.photographer, sf.location, sf.category, sf.description, sf.tags,
+               {sel_optional},
                s.license_at, sf.created_at
         FROM submission_files sf
         JOIN submissions s   ON sf.submission_id = s.id
