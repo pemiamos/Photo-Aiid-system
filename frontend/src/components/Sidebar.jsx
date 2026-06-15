@@ -235,20 +235,37 @@ export default function Sidebar() {
 
     setScanning(true)
 
+    // The backend scan runs as a background task, so the first few polls may see
+    // running=false before scan_directory flips the global progress flag. This
+    // gap is wider on Windows (slower process/IO startup, os.walk). Don't declare
+    // the scan "finished" until we've actually observed running=true at least
+    // once — otherwise the very first poll races the scan start and prematurely
+    // flips to 'done' with zero photos, leaving the gallery empty until the app
+    // is restarted. A startup grace window avoids getting stuck if the scan never
+    // starts. (Mirrors the analysis-polling guard below.)
+    let sawRunning = false
+    const startedAt = Date.now()
+    const STARTUP_GRACE_MS = 8000
+
     const fetchProgressAndPhotos = async () => {
       try {
         const progress = await api.getScanProgress()
-        
+
         // Load scanned photos in real-time
         const photoRes = await api.getPhotos({ folder_path: settings.folderPath })
         if (photoRes && photoRes.photos) {
           dispatch({ type: Actions.SET_PHOTOS, payload: photoRes.photos })
         }
 
-        if (progress && !progress.running) {
+        if (progress && progress.running) {
+          sawRunning = true
+        } else if (sawRunning || Date.now() - startedAt > STARTUP_GRACE_MS) {
+          // Either the scan ran and is now done, or it never started within the
+          // grace window — finish up.
           dispatch({ type: Actions.SET_SCAN_STATUS, payload: 'done' })
           setScanning(false)
         }
+        // else: scan not started yet, keep polling within the grace window
       } catch (err) {
         console.error("Polling scan progress failed:", err)
       }
