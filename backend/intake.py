@@ -332,8 +332,23 @@ async def submit(code: str = Form(...), license_agreed: int = Form(0)):
         await conn.close()
 
 
+def _merge_label_into_tags(label, tags_raw):
+    """把「特别标注」并入标签数组，便于后期按标签搜索。去重、跳过空与默认占位。"""
+    try:
+        tags = json.loads(tags_raw) if tags_raw else []
+        if not isinstance(tags, list):
+            tags = [str(tags)]
+    except (ValueError, TypeError):
+        tags = [t.strip() for t in str(tags_raw).split(",") if t.strip()]
+    label = (label or "").strip()
+    if label and label != "未命名" and label not in tags:
+        tags.append(label)
+    return json.dumps(tags, ensure_ascii=False) if tags else None
+
+
 async def _insert_file(conn, submission_id, label, object_key, file_name, size, meta):
     """写入一条照片记录，含可选的本地 AI 索引字段。"""
+    merged_tags = _merge_label_into_tags(label, meta.get("tags"))
     await conn.execute(
         "INSERT INTO submission_files "
         "(submission_id, content_label, object_key, file_name, file_size, "
@@ -345,7 +360,7 @@ async def _insert_file(conn, submission_id, label, object_key, file_name, size, 
             meta.get("location") or None,
             meta.get("category") or None,
             meta.get("description") or None,
-            meta.get("tags") or None,
+            merged_tags,
             time.time(),
         ),
     )
@@ -363,9 +378,8 @@ async def upload(
     tags: str = Form(""),
 ):
     """上传单张照片（原型：经后端落本地，结构同 OSS key）。"""
+    # 特别标注为选填，留空则归入 _safe 的默认目录「未命名」
     label = _safe(content_label)
-    if not content_label.strip():
-        raise HTTPException(400, "缺少内容标注")
 
     conn = await db.get_db()
     try:
@@ -447,9 +461,8 @@ async def record(
     tags: str = Form(""),
 ):
     """OSS 直传完成后登记元数据。校验 object_key 落在该摄影师前缀内。"""
+    # 特别标注为选填，留空则归入 _safe 的默认目录「未命名」
     label = _safe(content_label)
-    if not content_label.strip():
-        raise HTTPException(400, "缺少内容标注")
     conn = await db.get_db()
     try:
         rows = await conn.execute_fetchall(

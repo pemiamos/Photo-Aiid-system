@@ -23,6 +23,7 @@
   input[type=text]:focus{outline:none;border-color:var(--info);box-shadow:0 0 0 3px var(--info-bg);}
   .code-row{display:flex;gap:8px;align-items:center;margin-bottom:16px;}
   .code-row input{width:110px;text-transform:uppercase;font-weight:600;letter-spacing:1px;}
+  .code-row input#name{width:150px;text-transform:none;letter-spacing:normal;}
   .code-row button{padding:8px 14px;border:1px solid var(--line2);border-radius:8px;background:#fff;
     font-size:13px;cursor:pointer;}
   .msg{font-size:13px;}
@@ -70,7 +71,7 @@
 
     <div class="code-row">
       <input type="text" id="code" placeholder="投稿码" />
-      <button id="verifyBtn">确认</button>
+      <input type="text" id="name" placeholder="摄影师姓名" />
       <span class="msg" id="codeMsg"></span>
     </div>
 
@@ -85,7 +86,7 @@
 
       <div class="tools">
         <span class="sel" id="selCount">已选 0 张</span>
-        <input type="text" id="labelInput" placeholder="输入内容标注，如：夔门日出" />
+        <input type="text" id="labelInput" placeholder="输入标注，如：夔门日出" />
         <button id="applyBtn" disabled>批量标注</button>
       </div>
 
@@ -93,7 +94,7 @@
 
       <label class="agree">
         <input type="checkbox" id="license" />
-        <span>本人确认拥有所提交照片的完整著作权，并授权出版方在本书及相关宣传中使用。授权时间将被记录存档。</span>
+        <span>本人确认拥有所提交照片的完整著作权，并预授权出版方仅在本书及相关宣传中使用。授权时间将被记录存档。正式授权以正式授权书为准。</span>
       </label>
 
       <button class="submit block" id="submit" disabled>请先拉入照片</button>
@@ -122,24 +123,35 @@
       labelInput=$('labelInput'), submit=$('submit'), drop=$('drop'),
       picker=$('picker'), license=$('license'), body=$('body');
 
-  // ---- 投稿码校验 ----
-  $('verifyBtn').addEventListener('click', verify);
+  // ---- 投稿码 + 姓名校验 ----
+  // 输入投稿码与摄影师姓名，姓名与投稿码登记的一致才放行。
   $('code').addEventListener('keydown', function(e){ if(e.key==='Enter') verify(); });
+  $('name').addEventListener('keydown', function(e){ if(e.key==='Enter') verify(); });
+  $('name').addEventListener('blur', verify);
 
-  // 从投稿链接 ?code=A01 自动带入并校验
+  // 从投稿链接 ?code=A01 自动带入投稿码，聚焦到姓名输入（待摄影师填姓名后校验）
   var urlCode = new URLSearchParams(location.search).get('code');
-  if(urlCode){ $('code').value = urlCode; verify(); }
+  if(urlCode){ $('code').value = urlCode; $('name').focus(); }
 
   function verify(){
     var code = $('code').value.trim();
-    if(!code) return;
+    var name = $('name').value.trim();
+    if(!code || !name) return;
     var fd = new FormData(); fd.append('code', code);
     fetch('/api/intake/verify', { method:'POST', body:fd })
       .then(function(r){ if(!r.ok) throw new Error('投稿码无效'); return r.json(); })
       .then(function(d){
+        // 姓名与投稿码登记的不一致 → 拒绝
+        if(name !== (d.name || '').trim()){
+          state.code = null;
+          $('codeMsg').textContent = '✗ 姓名与投稿码不符';
+          $('codeMsg').className = 'msg err';
+          body.classList.remove('on');
+          return;
+        }
         state.code = code;
         $('bookTitle').textContent = '《'+d.book_title+'》照片征稿';
-        $('codeMsg').textContent = '✓ 欢迎回来，'+d.name;
+        $('codeMsg').textContent = '✅ 欢迎您！'+d.name+' 大师～～';
         $('codeMsg').className = 'msg ok';
         renderHistory(d);
         body.classList.add('on');

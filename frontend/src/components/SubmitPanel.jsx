@@ -28,6 +28,7 @@ export default function SubmitPanel() {
 
   const [serverUrl, setServerUrl] = useState(localStorage.getItem(LS_KEY) || '')
   const [code, setCode] = useState('')
+  const [name, setName] = useState('')             // 摄影师姓名，需与投稿码登记一致
   const [verified, setVerified] = useState(null)   // { name, mode, history }
   const [verifyMsg, setVerifyMsg] = useState('')
   const [license, setLicense] = useState(false)
@@ -44,14 +45,9 @@ export default function SubmitPanel() {
   const [labels, setLabels] = useState({})         // id -> content_label
   const [progress, setProgress] = useState({})     // id -> 0..100
 
-  // 进入时默认全选，标注默认取「类别」
+  // 进入时默认全选，标注框留空让用户自行填写
   useEffect(() => {
     setSelected(new Set(analyzed.map(p => p.id)))
-    setLabels(prev => {
-      const next = { ...prev }
-      for (const p of analyzed) if (next[p.id] === undefined) next[p.id] = p.ai?.category || ''
-      return next
-    })
   }, [analyzed])
 
   const base = serverUrl.replace(/\/+$/, '')
@@ -64,15 +60,19 @@ export default function SubmitPanel() {
   async function verify() {
     setVerified(null); setVerifyMsg('')
     if (!base) { setVerifyMsg('请先填写征稿服务器地址'); return }
-    if (!code.trim()) return
+    if (!code.trim() || !name.trim()) return
     try {
       const fd = new FormData(); fd.append('code', code.trim())
       const r = await fetch(base + '/api/intake/verify', { method: 'POST', body: fd })
       if (!r.ok) throw new Error('投稿码无效')
       const d = await r.json()
+      // 姓名与投稿码登记的不一致 → 拒绝
+      if (name.trim() !== (d.name || '').trim()) {
+        setVerifyMsg('✗ 姓名与投稿码不符'); return
+      }
       const cfg = await fetch(base + '/api/intake/oss-config').then(x => x.json())
       setVerified({ name: d.name, bookTitle: d.book_title, history: d.history || [], mode: cfg.mode })
-      setVerifyMsg('✓ ' + d.book_title + ' · ' + d.name)
+      setVerifyMsg('✅ 欢迎您！' + d.name + ' 大师～～')
     } catch (e) {
       setVerifyMsg('✗ ' + (e.message || '校验失败，检查地址与投稿码'))
     }
@@ -85,8 +85,7 @@ export default function SubmitPanel() {
   }
 
   const selectedList = analyzed.filter(p => selected.has(p.id))
-  const missingLabel = selectedList.filter(p => !(labels[p.id] || '').trim()).length
-  const canSubmit = verified && selectedList.length > 0 && missingLabel === 0 && license && !busy
+  const canSubmit = verified && selectedList.length > 0 && license && !busy
 
   async function submit() {
     if (!canSubmit) return
@@ -123,7 +122,7 @@ export default function SubmitPanel() {
       // 3) 逐张上传（携带本地 AI 索引）
       for (const p of selectedList) {
         const blob = await fetch(api.originalUrl(p.id)).then(r => r.blob())
-        const label = labels[p.id].trim()
+        const label = (labels[p.id] || '').trim()
         const ai = p.ai || {}
         const meta = {
           photographer: ai.photographer || '', location: ai.location || '',
@@ -179,7 +178,9 @@ export default function SubmitPanel() {
         <label>投稿码</label>
         <input value={code} onChange={e => setCode(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && verify()} placeholder="如 A01" style={{ width: 120 }} />
-        <button onClick={verify}>确认</button>
+        <input value={name} onChange={e => setName(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && verify()} onBlur={verify}
+          placeholder="摄影师姓名" style={{ width: 150 }} />
         <span className={'sp-msg ' + (verified ? 'ok' : 'err')}>{verifyMsg}</span>
       </div>
 
@@ -194,7 +195,6 @@ export default function SubmitPanel() {
         <span>已选 {selectedList.length} / {analyzed.length} 张</span>
         <button onClick={() => setSelected(new Set(analyzed.map(p => p.id)))}>全选</button>
         <button onClick={() => setSelected(new Set())}>清空</button>
-        <button onClick={() => setLabels(Object.fromEntries(analyzed.map(p => [p.id, p.ai?.category || ''])))}>标注全部用「类别」</button>
       </div>
 
       <div className="sp-list">
@@ -211,7 +211,7 @@ export default function SubmitPanel() {
                 {p.ai?.category && <span>🏷 {p.ai.category}</span>}
               </div>
             </div>
-            <input className="sp-label" value={labels[p.id] || ''} placeholder="内容标注"
+            <input className="sp-label" value={labels[p.id] || ''} placeholder="特别标注，非必填"
               onChange={e => setLabels(l => ({ ...l, [p.id]: e.target.value }))} />
             {progress[p.id] > 0 && <span className="sp-pct">{progress[p.id]}%</span>}
           </div>
@@ -220,10 +220,9 @@ export default function SubmitPanel() {
 
       <label className="sp-agree">
         <input type="checkbox" checked={license} onChange={e => setLicense(e.target.checked)} />
-        <span>已获摄影师授权：所提交照片可用于本书及相关宣传，授权时间将被记录。</span>
+        <span>本人确认拥有所提交照片的完整著作权，并预授权出版方仅在本书及相关宣传中使用。授权时间将被记录存档。正式授权以正式授权书为准。</span>
       </label>
 
-      {missingLabel > 0 && <p className="sp-warn">还有 {missingLabel} 张未填内容标注</p>}
 
       <button className="sp-submit" disabled={!canSubmit} onClick={submit}>
         {busy ? '上传中…' : `提交本次投稿（${selectedList.length} 张）`}
