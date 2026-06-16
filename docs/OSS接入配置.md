@@ -65,6 +65,9 @@ export INTAKE_ADMIN_TOKEN="一个足够强的口令"
 设置 `INTAKE_ADMIN_TOKEN` 后，访问 `/intake/admin` 或 `/intake/admin/codes` 会先要求输入口令，
 登录态保存在签名 Cookie 中（7 天）。摄影师上传相关接口不受影响、仍公开。
 
+> 桌面 App「投稿管理」远程管理云端时，跨域 Cookie 不发送，改用请求头 `X-Intake-Admin-Token`
+> 携带同一口令鉴权（后端 `_admin_ok` 同时接受 Cookie 与该头）。云端部署见 [部署到阿里云.md](部署到阿里云.md)。
+
 启动后访问 `GET /api/intake/oss-config`：
 - 返回 `{"mode":"oss",...}` → 已切到直传。
 - 返回 `{"mode":"local"}` → 仍是本地模式，检查上面 5 个变量。
@@ -86,8 +89,9 @@ export INTAKE_ADMIN_TOKEN="一个足够强的口令"
 ---
 
 ## 5. 生产化待办（上线前）
-- [x] 管理接口 `/api/intake/admin/*` 加管理员鉴权 → 设 `INTAKE_ADMIN_TOKEN`（见上）。
-- [ ] 上传页走 HTTPS + 正式域名，并把域名加入 OSS CORS。
+- [x] 管理接口 `/api/intake/admin/*` 加管理员鉴权 → 设 `INTAKE_ADMIN_TOKEN`（Cookie 或 `X-Intake-Admin-Token` 头）。
+- [x] 上传页走 HTTPS + 正式域名 → 已部署 `https://intake.sdexp.org`（见 [部署到阿里云.md](部署到阿里云.md)）。
+- [ ] 把 OSS CORS「来源」从 `*` 收紧为 `https://intake.sdexp.org`（可选，更安全）。
 - [x] 截稿后用 `rclone` 把整本搬到 R2 归档 → `scripts/archive-to-r2.sh <书目代号>`。
 - [ ] AK/SK 用最小权限子账号，定期轮换。
 

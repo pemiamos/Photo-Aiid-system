@@ -362,3 +362,28 @@ export async function intakeRenameBook(code, title) {
 export async function intakeDeleteCode(pid) {
   return intakeFetch(`/intake/admin/codes/${pid}`, { method: 'DELETE' })
 }
+
+/* ── 看板下钻：某投稿码的照片列表 ── */
+export async function intakeFiles(code) {
+  return intakeFetch(`/intake/admin/files?code=${encodeURIComponent(code)}`)
+}
+
+// 把 admin/files 返回的 url 解析成可直接用于 <img src> 的地址：
+// OSS 模式是预签名绝对地址，原样使用；本地直存是相对路径，拼上服务器地址。
+// （本地直存 + 远程带口令的极端组合下 <img> 无法携带鉴权头，属开发期边角，生产走 OSS。）
+export function intakeImageSrc(url) {
+  if (!url) return ''
+  if (/^https?:\/\//i.test(url)) return url
+  const base = getIntakeServer().base || ''
+  return `${base}${url}`
+}
+
+/* ── R2 归档：一键触发 + 状态轮询 ── */
+export async function intakeArchive(book) {
+  return intakeForm('/intake/admin/archive', { book })
+}
+
+export async function intakeArchiveStatus(book = '') {
+  const qs = book ? `?book=${encodeURIComponent(book)}` : ''
+  return intakeFetch(`/intake/admin/archive/status${qs}`)
+}

@@ -12,6 +12,7 @@ Photo-Aiid-system · 投稿征稿模块（M2 网页原型）
 不触碰现有 photos / ai_results 等表。
 """
 
+import asyncio
 import base64
 import csv
 import hashlib
@@ -20,6 +21,7 @@ import io
 import json
 import os
 import re
+import shutil
 import time
 import urllib.parse
 import uuid
@@ -108,18 +110,20 @@ def _pe(s) -> str:
     return urllib.parse.quote(str(s), safe="-_.~")
 
 
-def _assume_role(prefix: str) -> dict:
-    """调用 STS AssumeRole，返回限定在 {bucket}/{prefix}* 内可写的临时凭证。"""
+def _assume_role(prefix: str, actions: list | None = None) -> dict:
+    """调用 STS AssumeRole，返回限定在 {bucket}/{prefix}* 内的临时凭证。
+
+    actions 缺省为上传所需动作；看板下钻预览原图时传只读动作（见 _assume_role_read）。
+    注意：被扮演的 RAM 角色（OSS_STS_ROLE_ARN）须同时拥有这些动作的权限，
+    否则临时凭证再受 policy 限制也无效——只读预览要求角色具备 oss:GetObject。
+    """
+    actions = actions or ["oss:PutObject", "oss:AbortMultipartUpload", "oss:ListParts"]
     policy = {
         "Version": "1",
         "Statement": [
             {
                 "Effect": "Allow",
-                "Action": [
-                    "oss:PutObject",
-                    "oss:AbortMultipartUpload",
-                    "oss:ListParts",
-                ],
+                "Action": actions,
                 "Resource": [f"acs:oss:*:*:{OSS_BUCKET}/{prefix}*"],
             }
         ],
@@ -159,6 +163,38 @@ def _assume_role(prefix: str) -> dict:
         "SecurityToken": c["SecurityToken"],
         "Expiration": c["Expiration"],
     }
+
+
+def _assume_role_read(prefix: str) -> dict:
+    """限定在 {bucket}/{prefix}* 内的只读临时凭证（看板下钻预览原图用）。"""
+    return _assume_role(prefix, actions=["oss:GetObject"])
+
+
+def _oss_presign_get(object_key: str, creds: dict, expires: int = 600) -> str:
+    """用 STS 临时凭证为私有桶里的一个 object 生成预签名 GET URL（OSS 签名 V1）。
+
+    security-token 既作为查询参数，又作为子资源参与 CanonicalizedResource——这是
+    阿里云 V1 的硬性要求（子资源白名单含 security-token），漏掉则签名校验失败。
+    """
+    ak = creds["AccessKeyId"]
+    sk = creds["AccessKeySecret"]
+    token = creds["SecurityToken"]
+    deadline = int(time.time()) + expires
+    # CanonicalizedResource 用「未编码」的 key 与 token；查询串里再各自编码
+    canonical_resource = f"/{OSS_BUCKET}/{object_key}?security-token={token}"
+    string_to_sign = f"GET\n\n\n{deadline}\n{canonical_resource}"
+    signature = base64.b64encode(
+        hmac.new(sk.encode(), string_to_sign.encode(), hashlib.sha1).digest()
+    ).decode()
+    host = f"{OSS_BUCKET}.{OSS_REGION}.aliyuncs.com"
+    key_path = urllib.parse.quote(object_key, safe="/")
+    qs = urllib.parse.urlencode({
+        "OSSAccessKeyId": ak,
+        "Expires": deadline,
+        "Signature": signature,
+        "security-token": token,
+    })
+    return f"https://{host}/{key_path}?{qs}"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS books (
@@ -763,6 +799,82 @@ async def admin_submissions(book: str = "", _: None = Depends(require_admin)):
     }
 
 
+@router.get("/api/intake/admin/files")
+async def admin_photographer_files(code: str, _: None = Depends(require_admin)):
+    """看板下钻：列出某投稿码下所有照片，并给出可直接 <img> 预览的 url。
+
+    OSS 模式：为该摄影师前缀签发只读临时凭证，逐张生成预签名 GET URL（10 分钟有效）。
+    本地直存：url 指向受管理鉴权保护的 /api/intake/admin/file/raw 代理。
+    """
+    p = await _get_photographer(_safe(code).upper())
+    if not p:
+        raise HTTPException(404, "投稿码无效")
+
+    conn = await db.get_db()
+    try:
+        rows = await conn.execute_fetchall(
+            "SELECT sf.id, sf.content_label, sf.object_key, sf.file_name, "
+            "       sf.file_size, sf.location, sf.category, sf.description, "
+            "       sf.tags, sf.created_at "
+            "FROM submission_files sf "
+            "JOIN submissions s ON sf.submission_id = s.id "
+            "WHERE s.photographer_id = ? ORDER BY sf.created_at DESC, sf.id DESC",
+            (p["id"],),
+        )
+    finally:
+        await conn.close()
+
+    mode = "oss" if _oss_configured() else "local"
+    creds = None
+    if mode == "oss" and rows:
+        prefix = _photographer_prefix(p["invite_code"], p["name"], p["book_code"])
+        creds = _assume_role_read(prefix)
+
+    files = []
+    for r in rows:
+        key = r["object_key"]
+        if mode == "oss":
+            url = _oss_presign_get(key, creds)
+        else:
+            url = f"/api/intake/admin/file/raw?key={urllib.parse.quote(key)}"
+        try:
+            tags = json.loads(r["tags"]) if r["tags"] else []
+        except (ValueError, TypeError):
+            tags = []
+        files.append({
+            "id": r["id"],
+            "label": r["content_label"],
+            "file_name": r["file_name"],
+            "size": r["file_size"],
+            "mb": round((r["file_size"] or 0) / 1024 / 1024, 2),
+            "location": r["location"] or "",
+            "category": r["category"] or "",
+            "description": r["description"] or "",
+            "tags": tags if isinstance(tags, list) else [],
+            "url": url,
+            "date": time.strftime("%Y-%m-%d %H:%M", time.localtime(r["created_at"])),
+        })
+
+    return {
+        "code": p["invite_code"],
+        "name": p["name"],
+        "mode": mode,
+        "count": len(files),
+        "files": files,
+    }
+
+
+@router.get("/api/intake/admin/file/raw")
+async def admin_file_raw(key: str, _: None = Depends(require_admin)):
+    """本地直存模式下，受鉴权地回源单张原图。校验解析后仍落在 INTAKE_DATA 内，防越权。"""
+    if _oss_configured():
+        raise HTTPException(400, "OSS 模式请用预签名 URL 直接访问")
+    target = (INTAKE_DATA / key).resolve()
+    if not target.is_relative_to(INTAKE_DATA) or not target.is_file():
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(target)
+
+
 # ---------------------------------------------------------------------------
 # 编辑端：投稿码管理
 #
@@ -981,6 +1093,104 @@ async def export_codes_csv(
             "Content-Disposition": f"attachment; filename*=UTF-8''{quoted}",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# 编辑端：R2 归档（一键触发 scripts/archive-to-r2.sh + 状态轮询）
+#
+# 后端在仓库根目录跑归档脚本（rclone 把某书原图从 OSS 搬到 R2 并核对）。
+# 状态写 JSON 文件，便于重启后仍能展示「上次归档时间/结果」。进行中状态在内存。
+# 注意：脚本依赖运行机器已装 rclone 且配好 oss/r2 remote（见脚本头注释）。
+# ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ARCHIVE_SCRIPT = _REPO_ROOT / "scripts" / "archive-to-r2.sh"
+_ARCHIVE_STATE = Path(__file__).resolve().parent / "archive_state.json"
+_archive_running: dict[str, bool] = {}
+
+
+def _load_archive_state() -> dict:
+    try:
+        return json.loads(_ARCHIVE_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_archive_state(state: dict) -> None:
+    try:
+        _ARCHIVE_STATE.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+async def _run_archive(book: str) -> None:
+    """后台跑归档脚本，结束后把结果（成功/失败 + 日志尾）写入状态文件。"""
+    _archive_running[book] = True
+    started = time.time()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash", str(_ARCHIVE_SCRIPT), book,
+            cwd=str(_REPO_ROOT),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await proc.communicate()
+        log = (out or b"").decode("utf-8", "replace")
+        ok = proc.returncode == 0
+        message = "归档完成" if ok else f"归档失败（退出码 {proc.returncode}）"
+    except Exception as e:  # noqa: BLE001 — 任何异常都要落到状态里给前端看
+        ok = False
+        log = str(e)
+        message = "归档启动失败"
+    finally:
+        _archive_running[book] = False
+
+    state = _load_archive_state()
+    state[book] = {
+        "last_at": time.time(),
+        "last_at_str": time.strftime("%Y-%m-%d %H:%M", time.localtime()),
+        "ok": ok,
+        "message": message,
+        "log_tail": "\n".join(log.splitlines()[-12:]),
+        "duration_s": round(time.time() - started, 1),
+    }
+    _save_archive_state(state)
+
+
+@router.post("/api/intake/admin/archive")
+async def archive_book(book: str = Form(...), _: None = Depends(require_admin)):
+    """一键把某书原图从 OSS 归档到 R2（后台执行，不阻塞请求）。"""
+    book = (book or "").strip()
+    if not book:
+        raise HTTPException(400, "缺少书目代号")
+    if _archive_running.get(book):
+        raise HTTPException(409, "该书归档正在进行中")
+    if not _ARCHIVE_SCRIPT.is_file():
+        raise HTTPException(500, "未找到归档脚本 scripts/archive-to-r2.sh")
+    if not shutil.which("rclone"):
+        raise HTTPException(
+            400, "服务器未安装 rclone，无法归档。请在运行后端的机器上安装并配置 rclone。"
+        )
+    asyncio.create_task(_run_archive(book))
+    return {"ok": True, "started": True, "book": book}
+
+
+@router.get("/api/intake/admin/archive/status")
+async def archive_status(book: str = "", _: None = Depends(require_admin)):
+    """归档状态：是否进行中、上次时间/结果/日志尾。"""
+    book = (book or "").strip()
+    state = _load_archive_state()
+    info = state.get(book, {})
+    return {
+        "book": book,
+        "running": bool(_archive_running.get(book)),
+        "rclone": bool(shutil.which("rclone")),
+        "last_at_str": info.get("last_at_str", ""),
+        "ok": info.get("ok"),
+        "message": info.get("message", ""),
+        "log_tail": info.get("log_tail", ""),
+    }
 
 
 @router.get("/intake/admin/codes", response_class=HTMLResponse)
