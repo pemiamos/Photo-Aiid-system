@@ -1107,6 +1107,17 @@ _ARCHIVE_SCRIPT = _REPO_ROOT / "scripts" / "archive-to-r2.sh"
 _ARCHIVE_STATE = Path(__file__).resolve().parent / "archive_state.json"
 _archive_running: dict[str, bool] = {}
 
+# R2 持续镜像（systemd timer 跑 scripts/mirror-oss-to-r2.sh）写的状态文件。
+# 用于让 App 徽章反映「上一轮是否成功」，而不只是「rclone 是否就绪」。
+_MIRROR_STATE = Path("/var/log/photo-r2-mirror.state")
+
+
+def _load_mirror_state() -> dict | None:
+    try:
+        return json.loads(_MIRROR_STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
 
 def _load_archive_state() -> dict:
     try:
@@ -1190,6 +1201,8 @@ async def archive_status(book: str = "", _: None = Depends(require_admin)):
         "ok": info.get("ok"),
         "message": info.get("message", ""),
         "log_tail": info.get("log_tail", ""),
+        # 持续镜像状态（整桶级，与具体 book 无关）：{at, ok, msg} 或 null
+        "mirror": _load_mirror_state(),
     }
 
 

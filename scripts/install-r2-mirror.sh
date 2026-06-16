@@ -58,8 +58,8 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-touch /var/log/photo-r2-mirror.log
-chown "$RUN_USER":"$(id -gn "$RUN_USER")" /var/log/photo-r2-mirror.log
+touch /var/log/photo-r2-mirror.log /var/log/photo-r2-mirror.state
+chown "$RUN_USER":"$(id -gn "$RUN_USER")" /var/log/photo-r2-mirror.log /var/log/photo-r2-mirror.state
 
 systemctl daemon-reload
 systemctl enable --now photo-r2-mirror.timer

@@ -393,10 +393,24 @@ function IntakeAddress({ book, base, ossMode, notify }) {
   // 切换书籍时拉一次状态（取 rclone 就绪标志）
   useEffect(() => { loadStatus() }, [loadStatus])
 
-  // R2 改为「服务器每 15 分钟自动增量备份」（systemd timer），不再手动归档。
-  // 徽章只反映 rclone 是否就绪：就绪即视为持续备份生效。
-  const r2Ready = arch?.rclone === true
-  const r2Unavailable = arch?.rclone === false
+  // R2 = 服务器每 15min 自动增量备份（systemd timer）。徽章反映**上一轮真实结果**：
+  // 成功→绿「持续备份中·最近hh:mm」；失败→黄「备份异常」(hover 看原因)；未装 rclone→黄；
+  // 就绪但还没跑过→灰「待运行」；状态未拉到→灰「检测中」。
+  const mirror = arch?.mirror
+  const hhmm = mirror?.at ? mirror.at.slice(11, 16) : ''
+  let r2Cls = '', r2Dot = 'muted', r2Text = 'R2 备份 · 检测中…', r2Title = ''
+  if (arch) {
+    if (arch.rclone === false) {
+      r2Cls = 'warn'; r2Dot = 'warn'; r2Text = 'R2 备份未启用（服务器未装 rclone）'
+    } else if (mirror && mirror.ok === false) {
+      r2Cls = 'warn'; r2Dot = 'warn'
+      r2Text = `R2 备份异常${hhmm ? ' · ' + hhmm : ''}`; r2Title = mirror.msg || ''
+    } else if (mirror && mirror.ok === true) {
+      r2Cls = 'ok'; r2Dot = 'ok'; r2Text = `R2 持续备份中${hhmm ? ' · 最近 ' + hhmm : ''}`
+    } else {
+      r2Text = 'R2 持续备份 · 待运行'
+    }
+  }
 
   return (
     <div className="intake-addr">
@@ -412,9 +426,8 @@ function IntakeAddress({ book, base, ossMode, notify }) {
           <i className={`dot ${ossMode === 'oss' ? 'ok' : 'warn'}`} />
           OSS {ossMode === 'oss' ? '已联动直传' : ossMode === 'local' ? '本地直存' : '检测中…'}
         </span>
-        <span className={`pl-badge ${r2Ready ? 'ok' : r2Unavailable ? 'warn' : ''}`}>
-          <i className={`dot ${r2Ready ? 'ok' : r2Unavailable ? 'warn' : 'muted'}`} />
-          {r2Ready ? 'R2 持续备份中' : r2Unavailable ? 'R2 备份未启用（服务器未装 rclone）' : 'R2 备份 · 检测中…'}
+        <span className={`pl-badge ${r2Cls}`} title={r2Title}>
+          <i className={`dot ${r2Dot}`} />{r2Text}
         </span>
       </div>
     </div>

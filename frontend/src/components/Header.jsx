@@ -23,7 +23,7 @@ export default function Header() {
     <header className="header">
       <div className="header-logo">
         <b>Photo-Aiid-system</b>
-        <span className="version-badge">v2.0</span>
+        <span className="version-badge">v3.0</span>
       </div>
 
       <nav className="header-nav">
