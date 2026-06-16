@@ -87,7 +87,8 @@ export default function App() {
     <div className="app-layout">
       <Header />
       <div className="app-body">
-        <Sidebar />
+        {/* 画廊 / 索引表才需要 AI 分析侧栏；投稿管理 / 教程 / 投稿页隐藏，内容铺满 */}
+        {['gallery', 'index'].includes(activeTab) && <Sidebar />}
         <main className="app-main">
           {activeTab === 'gallery' && <Gallery />}
           {activeTab === 'index' && <IndexTable />}

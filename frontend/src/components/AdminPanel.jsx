@@ -346,7 +346,7 @@ function Console({ fail, onDisconnect }) {
                 </div>
               </div>
 
-              <IntakeAddress book={current.code} base={serverBase} ossMode={ossMode} fail={fail} notify={notify} />
+              <IntakeAddress book={current.code} base={serverBase} ossMode={ossMode} notify={notify} />
 
               <div className="seg seg-detail">
                 <button className={view === 'board' ? 'active' : ''} onClick={() => setView('board')}>征稿看板</button>
@@ -382,59 +382,21 @@ function intakeUrl(base, code) {
 }
 
 /* ── 投稿地址面板（整本书共用，提到书籍头部）── */
-function IntakeAddress({ book, base, ossMode, fail, notify }) {
-  const dialog = useDialog()
+function IntakeAddress({ book, base, ossMode, notify }) {
   const webEntry = intakeUrl(base)
-  const [arch, setArch] = useState(null)   // 归档状态 {running,last_at_str,ok,message,rclone,log_tail}
-  const pollRef = useRef(null)
+  const [arch, setArch] = useState(null)   // 备份状态，主要看 rclone 是否就绪
 
   const loadStatus = useCallback(async () => {
-    try {
-      const s = await api.intakeArchiveStatus(book)
-      setArch(s)
-      return s
-    } catch { return null }
+    try { setArch(await api.intakeArchiveStatus(book)) } catch { /* 忽略 */ }
   }, [book])
 
-  // 切换书籍时拉一次状态，并清掉旧轮询
-  useEffect(() => {
-    loadStatus()
-    return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [loadStatus])
+  // 切换书籍时拉一次状态（取 rclone 就绪标志）
+  useEffect(() => { loadStatus() }, [loadStatus])
 
-  // 进行中则每 4s 轮询，结束自动停
-  useEffect(() => {
-    if (arch?.running && !pollRef.current) {
-      pollRef.current = setInterval(async () => {
-        const s = await loadStatus()
-        if (s && !s.running) {
-          clearInterval(pollRef.current); pollRef.current = null
-          notify?.(s.ok ? `《${book}》归档完成` : `归档失败：${s.message || ''}`)
-        }
-      }, 4000)
-    }
-  }, [arch?.running, book, loadStatus, notify])
-
-  async function startArchive() {
-    if (!(await dialog.confirm({
-      title: 'R2 归档',
-      message: `把《${book}》的原图从阿里云 OSS 归档到 Cloudflare R2？该操作在服务器后台执行，可能耗时较久。`,
-      confirmText: '开始归档',
-    }))) return
-    try {
-      await api.intakeArchive(book)
-      notify?.('已开始归档，进度将自动刷新')
-      await loadStatus()
-    } catch (e) { fail(e.message) }
-  }
-
-  const running = arch?.running
-  const r2Tone = running ? 'warn' : (arch?.ok === false ? 'warn' : (arch?.last_at_str ? 'ok' : ''))
-  const r2Text = running
-    ? '归档进行中…'
-    : arch?.last_at_str
-      ? `上次归档 ${arch.last_at_str}${arch.ok === false ? '（失败）' : ''}`
-      : '尚未归档'
+  // R2 改为「服务器每 15 分钟自动增量备份」（systemd timer），不再手动归档。
+  // 徽章只反映 rclone 是否就绪：就绪即视为持续备份生效。
+  const r2Ready = arch?.rclone === true
+  const r2Unavailable = arch?.rclone === false
 
   return (
     <div className="intake-addr">
@@ -448,14 +410,11 @@ function IntakeAddress({ book, base, ossMode, fail, notify }) {
         <span className="pl-badge ok"><i className="dot ok" />征稿服务器 已连接</span>
         <span className={`pl-badge ${ossMode === 'oss' ? 'ok' : 'warn'}`}>
           <i className={`dot ${ossMode === 'oss' ? 'ok' : 'warn'}`} />
-          阿里云 OSS {ossMode === 'oss' ? '已联动直传' : ossMode === 'local' ? '本地直存' : '检测中…'}
+          OSS {ossMode === 'oss' ? '已联动直传' : ossMode === 'local' ? '本地直存' : '检测中…'}
         </span>
-        <span className={`pl-badge ${r2Tone}`} title={arch?.log_tail || ''}>
-          <i className={`dot ${r2Tone || 'muted'}`} />R2 归档 · {r2Text}
-          {arch && arch.rclone === false
-            ? <span className="muted" style={{ marginLeft: 6 }}>（服务器未装 rclone）</span>
-            : <button className="btn-link copy" onClick={startArchive} disabled={running}
-                style={{ marginLeft: 6 }}>{running ? '进行中' : '一键归档'}</button>}
+        <span className={`pl-badge ${r2Ready ? 'ok' : r2Unavailable ? 'warn' : ''}`}>
+          <i className={`dot ${r2Ready ? 'ok' : r2Unavailable ? 'warn' : 'muted'}`} />
+          {r2Ready ? 'R2 持续备份中' : r2Unavailable ? 'R2 备份未启用（服务器未装 rclone）' : 'R2 备份 · 检测中…'}
         </span>
       </div>
     </div>
