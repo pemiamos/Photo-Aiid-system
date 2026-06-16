@@ -401,12 +401,36 @@ export default function Sidebar() {
     }
   }, [settings, dispatch])
 
-  /* ── 全局分析：整个文件夹中尚未分析（待分析/失败）的照片 ── */
+  /* ── 全局分析：可对整个文件夹反复重新分析 ──
+     · 全新文件夹 → 直接分析全部未分析照片
+     · 混合（部分已分析）→ 询问「重分析全部 / 仅补未分析」
+     · 全部已分析 → 确认后覆盖式重新分析全部
+     已分析照片会被重新调用 AI 并覆盖原结果（含摄影师/地点/标签）。*/
   const handleAnalyzeAll = useCallback(async () => {
-    const targets = folderPhotos.filter(p => p.scan_status === 'queued' || p.scan_status === 'error')
-    if (targets.length === 0) {
-      alert("当前文件夹没有需要分析的照片（均已分析完成）。")
+    if (folderPhotos.length === 0) {
+      alert("当前文件夹没有照片。")
       return
+    }
+    const isAnalyzed = p => p.status === 'done' || p.ai_tags
+    const pending = folderPhotos.filter(p => !isAnalyzed(p))
+    const analyzedNum = folderPhotos.length - pending.length
+
+    let targets
+    if (pending.length === 0) {
+      // 全部已分析：确认是否覆盖重跑
+      if (!confirm(`文件夹内 ${folderPhotos.length} 张照片均已分析。\n是否重新分析全部（覆盖已有结果）？`)) return
+      targets = folderPhotos
+    } else if (analyzedNum > 0) {
+      // 混合：让用户选择重分析全部还是仅补未分析
+      const reAll = confirm(
+        `文件夹共 ${folderPhotos.length} 张，其中 ${analyzedNum} 张已分析。\n\n` +
+        `「确定」= 重新分析全部 ${folderPhotos.length} 张（覆盖已有结果）\n` +
+        `「取消」= 仅分析未分析的 ${pending.length} 张`
+      )
+      targets = reAll ? folderPhotos : pending
+    } else {
+      // 全新文件夹：分析全部
+      targets = folderPhotos
     }
     await runAnalysis(targets.map(p => p.id))
   }, [folderPhotos, runAnalysis])
@@ -757,7 +781,7 @@ export default function Sidebar() {
           className="btn primary"
           onClick={handleAnalyzeAll}
           disabled={folderPhotos.length === 0 || engineStatus === 'busy'}
-          title="分析整个文件夹中尚未分析的照片"
+          title="分析整个文件夹；可反复重新分析（已分析的会确认后覆盖）"
         >
           {engineStatus === 'busy' ? '分析中…' : '全局分析'}
         </button>
@@ -765,7 +789,7 @@ export default function Sidebar() {
           className="btn primary"
           onClick={handleAnalyzeSelected}
           disabled={selectedIds.length === 0 || engineStatus === 'busy'}
-          title="仅分析在画廊中点选的照片"
+          title="分析画廊中点选的照片；可反复重新分析（含已分析的，覆盖结果）"
         >
           {engineStatus === 'busy'
             ? '分析中…'

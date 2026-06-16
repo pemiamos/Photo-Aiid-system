@@ -85,6 +85,13 @@ def cancel_analysis() -> dict:
 import re as _re
 from pathlib import PurePath as _PurePath
 
+# Camera/phone auto-generated filename prefixes that must never be mistaken
+# for a photographer name once filename takes priority over the AI guess.
+_CAMERA_PREFIXES = {
+    "IMG", "DSC", "DSCF", "DSCN", "PXL", "DJI", "GOPR", "GH", "GX",
+    "PANO", "MVIMG", "P", "PIC", "PHOTO", "SDX", "SDEXP",
+}
+
 
 def guess_photographer(file_name: str, folder_path: str) -> str:
     """Heuristic fallback: pull a likely photographer name (real name or
@@ -104,8 +111,12 @@ def guess_photographer(file_name: str, folder_path: str) -> str:
         head = _re.split(r"[-_—–]", cand.strip(), maxsplit=1)[0].strip()
         if not head:
             continue
-        # Chinese name/nickname (2-4 漢字) or an ASCII name (letters only, 2-12).
-        if _re.fullmatch(r"[一-鿿]{2,4}", head):
+        # Camera/device auto-generated prefixes are NOT photographer names.
+        if head.upper() in _CAMERA_PREFIXES:
+            continue
+        # Chinese name/nickname (2-8 漢字, e.g. 「张扬的小强」) or an ASCII name
+        # (letters only, 2-12).
+        if _re.fullmatch(r"[一-鿿]{2,8}", head):
             return head
         if _re.fullmatch(r"[A-Za-z][A-Za-z.]{1,11}", head):
             return head
@@ -221,11 +232,16 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
             else:
                 final_location = place_norm or geocode.normalize_location(result.location)
 
-            # Photographer: prefer the model's field, fall back to a filename/
-            # folder heuristic so a name is never silently dropped.
-            final_photographer = result.photographer or guess_photographer(
+            # Photographer: a name written in the filename/folder is what the
+            # author themselves typed — it is authoritative. The model cannot
+            # know a photographer's name from pixels alone, so its field is a
+            # guess (often a hallucination or a misread of a neighbouring
+            # filename/watermark) and is used only as a fallback. This mirrors
+            # the location policy above: trust the filename, not the per-image
+            # text guess.
+            final_photographer = guess_photographer(
                 photo["file_name"], folder_path
-            )
+            ) or result.photographer
 
             # Store results
             await db.upsert_ai_result(
