@@ -73,6 +73,20 @@ export default function AboutPage() {
           这不是病毒，而是未签名导致。让对方<b>右键点图标 → 打开 → 再点打开</b>即可（只需一次）；
           或在终端执行 <code>xattr -dr com.apple.quarantine "/Applications/Photo-Aiid-system.app"</code>。
         </p>
+
+        <h2>6. 下载与平台（Mac / Windows）</h2>
+        <p>
+          本应用提供 <b>macOS（Apple Silicon）</b> 与 <b>Windows（x64）</b> 两个平台的安装包，
+          均在 <a href="https://github.com/pemiamos/Photo-Aiid-system/releases" target="_blank" rel="noreferrer">GitHub Releases</a> 发布：
+        </p>
+        <ul>
+          <li><b>macOS：</b>下载 <code>.dmg</code>，拖入「应用程序」即可（首次打开见上节绕过 Gatekeeper）。</li>
+          <li>
+            <b>Windows：</b>由 <b>GitHub Actions 自动构建</b>，在 Release 页下载
+            <code>_x64-setup.exe</code>（NSIS 安装包，推荐）运行安装；另有 <code>.msi</code> 供企业部署。
+            首次运行若被 SmartScreen 拦截，点「更多信息 → 仍要运行」即可（未签名所致，非病毒）。
+          </li>
+        </ul>
       </div>
     </section>
   )
