@@ -95,7 +95,11 @@ export INTAKE_ADMIN_TOKEN="一个足够强的口令"
 - [x] 截稿后用 `rclone` 把整本搬到 R2 归档 → `scripts/archive-to-r2.sh <书目代号>`。
 - [ ] AK/SK 用最小权限子账号，定期轮换。
 
-## 6. 归档到 Cloudflare R2
+## 6. 备份 / 归档到 Cloudflare R2
+
+> 日常**异地备份已自动化**：云端服务器每 15 分钟增量镜像 OSS→R2（systemd timer，只增不删），
+> 一次性部署见 [部署到阿里云.md](部署到阿里云.md) 「八、R2 持续备份」。OSS 永久保留、App 看图始终走 OSS，
+> R2 仅作不读取的容灾副本。下面的 `archive-to-r2.sh` 是**截稿后**按书带元数据归档/可选清空 OSS 的命令行工具。
 
 截稿后一条命令搬运 + 核对（参考 `scripts/rclone.conf.example` 配好 rclone）：
 
