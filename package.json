@@ -1,7 +1,7 @@
 {
   "name": "photo-aiid-system-desktop",
   "private": true,
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Photo-Aiid-system Tauri 桌面外壳",
   "scripts": {
     "tauri": "tauri"
