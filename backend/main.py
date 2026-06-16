@@ -90,6 +90,9 @@ app.include_router(intake.router)
 class ScanRequest(BaseModel):
     folder_path: str
 
+class FolderRequest(BaseModel):
+    path: str
+
 class AnalyzeRequest(BaseModel):
     photo_ids: list[int] | None = None
     engine: str | None = None
@@ -165,19 +168,12 @@ async def scan_folder(req: ScanRequest, bg: BackgroundTasks):
     if not os.path.isdir(folder):
         raise HTTPException(status_code=400, detail=f"路径不存在或不是文件夹: {folder}")
 
-    # Check if this is a new folder path to clear history
-    import unicodedata
-    def norm(p):
-        return unicodedata.normalize("NFC", p.replace("\\", "/").rstrip("/"))
-
+    # 多文件夹持久化库：换文件夹**不再清库**。每扫一个文件夹就并入库（按 file_path
+    # upsert，重扫同路径只更新不重复），历史文件夹的元数据与 AI 结果长期保留，供索引表
+    # 全局搜索跨全库检索。清理交给「已索引文件夹」的移除/清空入口显式完成。
     settings = await db.get_settings()
-    old_folder = settings.get("last_folder", "")
-    
-    if old_folder and norm(old_folder) != norm(folder):
-        logger.info(f"New folder path detected: {folder}. Clearing previous scan and analysis records.")
-        await db.clear_database()
 
-    # Save folder path to settings
+    # Save folder path to settings（仅记录「当前工作文件夹」，画廊据此过滤显示）
     await db.update_settings({"last_folder": folder})
 
     thumb_size = int(settings.get("thumbnail_max_size", "512"))
@@ -194,6 +190,54 @@ async def scan_folder(req: ScanRequest, bg: BackgroundTasks):
 @app.get("/api/scan/progress")
 async def scan_progress():
     return scanner.get_scan_progress()
+
+
+# ---------------------------------------------------------------------------
+# 已索引文件夹注册表（多文件夹持久库的管理）
+# ---------------------------------------------------------------------------
+
+@app.get("/api/folders")
+async def list_folders():
+    """列出所有曾扫描过的文件夹及其张数/已分析数/最近扫描时间，并标注路径是否仍存在。"""
+    folders = await db.get_indexed_folders()
+    for f in folders:
+        f["exists"] = os.path.isdir(f["path"])
+    return {"folders": folders}
+
+
+@app.post("/api/folders/remove")
+async def remove_folder(req: FolderRequest):
+    """移除单个已索引文件夹（删除其下所有照片元数据/AI 结果与扫描记录）。"""
+    path = (req.path or "").strip()
+    if not path:
+        raise HTTPException(status_code=400, detail="缺少路径")
+    deleted = await db.remove_folder(path)
+    # 若移除的是当前工作文件夹，顺手清掉 last_folder
+    settings = await db.get_settings()
+    cur = (settings.get("last_folder", "") or "").replace("\\", "/").rstrip("/")
+    if cur and cur == path.replace("\\", "/").rstrip("/"):
+        await db.update_settings({"last_folder": ""})
+    return {"removed": deleted, "path": path}
+
+
+@app.post("/api/folders/clear")
+async def clear_folders():
+    """清空整个索引库（所有文件夹）。"""
+    await db.clear_database()
+    await db.update_settings({"last_folder": ""})
+    return {"ok": True}
+
+
+@app.post("/api/folders/clean-stale")
+async def clean_stale_folders():
+    """清理失效文件夹：路径在磁盘上已不存在的，整条移除。"""
+    folders = await db.get_indexed_folders()
+    removed = []
+    for f in folders:
+        if not os.path.isdir(f["path"]):
+            await db.remove_folder(f["path"])
+            removed.append(f["path"])
+    return {"removed": removed, "count": len(removed)}
 
 
 # ---------------------------------------------------------------------------
@@ -303,11 +347,23 @@ async def get_thumbnail(photo_id: int):
     if thumb_path.exists():
         return FileResponse(str(thumb_path), media_type="image/jpeg")
 
-    # Fall back to original file
+    # 按需生成：扫描阶段不再全量生成缩略图（上万张库才放得下），首次被请求（搜索命中、
+    # 滚动到可见）时才从原图实时生成 512px 并缓存，下次直接命中缓存。
     if os.path.exists(photo["file_path"]):
+        settings = await db.get_settings()
+        thumb_size = int(settings.get("thumbnail_max_size", "512"))
+        try:
+            ok = await asyncio.to_thread(
+                scanner.generate_thumbnail, photo["file_path"], thumb_path, thumb_size
+            )
+            if ok and thumb_path.exists():
+                return FileResponse(str(thumb_path), media_type="image/jpeg")
+        except Exception as e:
+            logger.warning(f"按需生成缩略图失败 {photo['file_path']}: {e}")
+        # 兜底：生成失败则直接回原图
         return FileResponse(photo["file_path"])
 
-    raise HTTPException(status_code=404, detail="缩略图未找到")
+    raise HTTPException(status_code=404, detail="缩略图未找到（原文件可能已移动或删除）")
 
 
 @app.get("/api/originals/{photo_id}")

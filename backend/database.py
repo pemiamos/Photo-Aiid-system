@@ -647,3 +647,63 @@ async def clear_database():
     finally:
         await db.close()
 
+
+# ---------------------------------------------------------------------------
+# Indexed-folder registry (multi-folder persistent library)
+# ---------------------------------------------------------------------------
+
+async def get_indexed_folders() -> list[dict]:
+    """List every folder ever scanned (distinct scan_sessions.root_path), with
+    live photo / analyzed counts and the most recent scan time. Filesystem
+    existence is checked by the caller (this layer stays pure DB).
+    """
+    db = await get_db()
+    try:
+        sessions = await db.execute_fetchall(
+            "SELECT root_path, MAX(created_at) AS last_scan "
+            "FROM scan_sessions GROUP BY root_path ORDER BY last_scan DESC"
+        )
+        out: list[dict] = []
+        for s in sessions:
+            root = s["root_path"]
+            norm = root.replace("\\", "/").rstrip("/")
+            cnt = await db.execute_fetchall(
+                "SELECT COUNT(*) AS total, "
+                "       SUM(CASE WHEN a.photo_id IS NOT NULL THEN 1 ELSE 0 END) AS analyzed "
+                "FROM photos p LEFT JOIN ai_results a ON a.photo_id = p.id "
+                "WHERE p.file_path LIKE ? OR replace(p.file_path, '\\', '/') LIKE ?",
+                (f"{norm}/%", f"{norm}/%"),
+            )
+            out.append({
+                "path": root,
+                "photo_count": cnt[0]["total"] or 0,
+                "analyzed_count": cnt[0]["analyzed"] or 0,
+                "last_scan": s["last_scan"],
+            })
+        return out
+    finally:
+        await db.close()
+
+
+async def remove_folder(path: str) -> int:
+    """Remove one indexed folder: delete all photos under that path (cascades to
+    ai_results / exif_data) plus its scan_sessions. Returns deleted photo count.
+    """
+    db = await get_db()
+    try:
+        norm = path.replace("\\", "/").rstrip("/")
+        cur = await db.execute(
+            "DELETE FROM photos WHERE file_path LIKE ? OR replace(file_path, '\\', '/') LIKE ?",
+            (f"{norm}/%", f"{norm}/%"),
+        )
+        deleted = cur.rowcount
+        await db.execute(
+            "DELETE FROM scan_sessions WHERE root_path = ? "
+            "OR replace(root_path, '\\', '/') = ?",
+            (path, norm),
+        )
+        await db.commit()
+        return deleted
+    finally:
+        await db.close()
+

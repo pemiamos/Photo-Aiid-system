@@ -411,7 +411,7 @@ export default function Sidebar() {
       alert("当前文件夹没有照片。")
       return
     }
-    const isAnalyzed = p => p.status === 'done' || p.ai_tags
+    const isAnalyzed = p => p.scan_status === 'done' || !!p.ai
     const pending = folderPhotos.filter(p => !isAnalyzed(p))
     const analyzedNum = folderPhotos.length - pending.length
 
@@ -481,25 +481,28 @@ export default function Sidebar() {
   }, [settings.engine])
 
   /* ── collect all tags from folder photos ── */
+  // 标签/类别在照片对象上是嵌套的 p.ai.{tags,category}（见 /api/photos 返回），
+  // 不是顶层 p.ai_tags/p.ai_category——之前用错字段导致「标签数」恒为 0。
   const allTags = []
   const tagSet = new Set()
   folderPhotos.forEach(p => {
-    if (p.ai_tags) {
-      const tags = Array.isArray(p.ai_tags) ? p.ai_tags : [p.ai_tags]
-      tags.forEach(t => {
-        if (!tagSet.has(t)) {
-          tagSet.add(t)
-          allTags.push(t)
-        }
-      })
-    }
-    if (p.ai_category && !tagSet.has(p.ai_category)) {
-      tagSet.add(p.ai_category)
-      allTags.push(p.ai_category)
+    const ai = p.ai
+    if (!ai) return
+    const tags = Array.isArray(ai.tags) ? ai.tags : (ai.tags ? [ai.tags] : [])
+    tags.forEach(t => {
+      if (t && !tagSet.has(t)) {
+        tagSet.add(t)
+        allTags.push(t)
+      }
+    })
+    if (ai.category && !tagSet.has(ai.category)) {
+      tagSet.add(ai.category)
+      allTags.push(ai.category)
     }
   })
 
-  const analyzedCount = folderPhotos.filter(p => p.status === 'done' || p.ai_tags).length
+  // 已分析 = 扫描状态为 done 或已有 ai 结果（之前用的 p.status/p.ai_tags 字段不存在）。
+  const analyzedCount = folderPhotos.filter(p => p.scan_status === 'done' || p.ai).length
   const renamedCount = folderPhotos.filter(p => p.renamed).length
 
   return (
@@ -735,7 +738,13 @@ export default function Sidebar() {
 
         {renamePreview && (
           <div className="rename-preview">
-            预览：<span>{renamePreview}</span>
+            <div className="rp-text">预览：<span>{renamePreview}</span></div>
+            <button
+              type="button"
+              className="token-chip"
+              title="刷新画廊中的文件名（按当前字段立即重算）"
+              onClick={() => dispatch({ type: Actions.BUMP_RENAME_PREVIEW })}
+            >刷新</button>
           </div>
         )}
         <div className="sidebar-hint">

@@ -6,7 +6,33 @@
   flex: 1;
   overflow-y: auto;
   padding: 20px 24px;
+  position: relative;
 }
+
+/* 拖文件夹进画廊的覆盖提示 */
+.gallery-section.folder-drag { outline: 2px dashed var(--amber); outline-offset: -10px; }
+.folder-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(1px);
+  pointer-events: none;
+}
+.folder-drop-card {
+  font-size: 14px;
+  color: var(--amber);
+  font-weight: 600;
+  text-align: center;
+  padding: 26px 34px;
+  border: 2px dashed var(--amber);
+  border-radius: 14px;
+  background: var(--panel);
+}
+.fdo-icon { font-size: 34px; margin-bottom: 8px; }
 
 /* ── search ── */
 .search-row {

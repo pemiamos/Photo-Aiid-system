@@ -6,7 +6,21 @@
   overflow-y: auto;
   padding: 20px 28px 40px;
   animation: fadeIn .2s var(--ease);
+  /* 仅在整页内容超出一屏时才出现滑条，并与暗色主题统一 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
+.admin-wrap::-webkit-scrollbar { width: 9px; }
+.admin-wrap::-webkit-scrollbar-track { background: transparent; }
+.admin-wrap::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
+.admin-wrap::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+/* 已连接控制台：纵向 flex，让内容区撑开、署名页脚始终落到页面底部 */
+.admin-wrap.connected {
+  display: flex;
+  flex-direction: column;
+}
+.admin-wrap.connected .admin-grid { flex: 1 0 auto; }
 
 /* 登录 / 加载态：在主区域内垂直+水平居中 */
 .admin-wrap.center {
@@ -98,13 +112,28 @@
   border-radius: 8px;
 }
 
+/* 书籍卡片容器：不再限定高度/内层滚动，列表自然生长，整页由 .admin-wrap 统一滚动
+   （内容不超过一屏时就不会出现任何滑条）。 */
+.book-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .book-card {
   border: 1px solid var(--line);
   border-radius: 9px;
   padding: 11px 12px;
-  cursor: pointer;
+  cursor: grab;
   background: var(--panel);
-  transition: border-color .15s var(--ease), background .15s var(--ease);
+  transition: border-color .15s var(--ease), background .15s var(--ease), opacity .15s var(--ease);
+}
+.book-card:active { cursor: grabbing; }
+/* 拖拽中的卡片：半透明 + 虚线框，给出「正在移动」的反馈 */
+.book-card.dragging {
+  opacity: .45;
+  border-style: dashed;
+  border-color: var(--amber-dim);
 }
 .book-card:hover { border-color: var(--faint); }
 .book-card.active {
@@ -136,6 +165,35 @@
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
+
+/* 页面底部署名（与侧栏页脚同款，复用 .footer-logo/.footer-text/.footer-credit）。
+   靠 .admin-wrap.connected 的 flex 列 + .admin-grid:flex-1 撑到页面底；内容多时
+   随整页滚动到末尾出现，不会粘在书籍栏下方。 */
+.admin-footer {
+  flex-shrink: 0;
+  /* 宽度对齐左侧「书籍项目」列（.admin-grid 第一列 280px），并靠左，
+     使署名在该列范围内居中——与书籍栏视觉居中对齐，而非整页居中 */
+  align-self: flex-start;
+  width: 280px;
+  max-width: 100%;
+  margin-top: 22px;
+  padding: 14px 0 2px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+.admin-footer a {
+  color: var(--faint);
+  text-decoration: none;
+  transition: color .15s var(--ease);
+}
+.admin-footer a:hover { color: var(--amber); }
 
 /* 右：详情 */
 .book-detail { min-width: 0; }

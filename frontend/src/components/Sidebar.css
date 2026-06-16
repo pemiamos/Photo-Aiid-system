@@ -187,12 +187,21 @@
   font-size: 11px;
   color: var(--faint);
   font-family: var(--mono);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rp-text {
+  flex: 1;
+  min-width: 0;
   word-break: break-all;
 }
 
 .rename-preview span {
   color: var(--amber);
 }
+/* 刷新按钮复用 .token-chip（与「添加」一致），不被外层 break-all 挤压 */
+.rename-preview .token-chip { flex-shrink: 0; }
 
 /* ── stats ── */
 .stat-row {

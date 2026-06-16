@@ -50,7 +50,27 @@ export default function SubmitPanel() {
     setSelected(new Set(analyzed.map(p => p.id)))
   }, [analyzed])
 
-  const base = serverUrl.replace(/\/+$/, '')
+  // 把用户粘进来的任意地址规整成「纯源」：scheme://host[:port]。
+  // 摄影师常把投稿页/二维码分享链接（如 https://intake.sdexp.org/intake?code=A02）
+  // 整段粘进来，若不剥掉 /intake 与 ?code=，拼接出的 API 地址会变成
+  // …/intake?code=A02/api/intake/verify → 404，误报「投稿码无效」。
+  // 后端只在域名根提供 /api/intake/*（见 deploy/nginx-intake.conf），故取 origin 即可。
+  const base = useMemo(() => {
+    const raw = (serverUrl || '').trim()
+    if (!raw) return ''
+    try {
+      // 缺协议时补一个，保证能被 URL 解析（如直接粘 intake.sdexp.org/intake）
+      return new URL(/^https?:\/\//i.test(raw) ? raw : 'https://' + raw).origin
+    } catch {
+      return raw.replace(/\/+$/, '')
+    }
+  }, [serverUrl])
+
+  // 分享链接里若带 ?code=xxx，自动回填到投稿码框（仅在用户尚未填写时）。
+  useEffect(() => {
+    const m = (serverUrl || '').match(/[?&]code=([^&#\s]+)/i)
+    if (m && !code.trim()) setCode(decodeURIComponent(m[1]).toUpperCase())
+  }, [serverUrl])
 
   function persistUrl(v) {
     setServerUrl(v)

@@ -25,6 +25,7 @@ const initialState = {
   selectedIds: [],            // user-selected photo ids for 自选分析
   searchQuery: '',
   searchResults: null,        // null = no semantic search active
+  renamePreviewNonce: 0,      // bump 一下让画廊重算「拟重命名」预览（侧栏刷新按钮用）
   stats: {
     total: 0,
     analyzed: 0,
@@ -55,6 +56,7 @@ export const Actions = {
   SET_SEARCH_RESULTS: 'SET_SEARCH_RESULTS',
   SET_STATS: 'SET_STATS',
   SET_ERROR: 'SET_ERROR',
+  BUMP_RENAME_PREVIEW: 'BUMP_RENAME_PREVIEW',
   CLEAR_ALL: 'CLEAR_ALL',
 }
 
@@ -140,6 +142,9 @@ function photoReducer(state, action) {
 
     case Actions.SET_ERROR:
       return { ...state, error: action.payload }
+
+    case Actions.BUMP_RENAME_PREVIEW:
+      return { ...state, renamePreviewNonce: state.renamePreviewNonce + 1 }
 
     case Actions.CLEAR_ALL:
       return {

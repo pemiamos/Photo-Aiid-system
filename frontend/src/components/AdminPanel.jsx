@@ -190,6 +190,21 @@ export default function AdminPanel() {
   )
 }
 
+/* 书籍项目的自定义排序持久化在本地（按服务器地址分桶）。后端按 created_at 返回，
+   这里把用户拖拽出的顺序覆盖上去；未在记录里的书（新建的）排到末尾、保持原相对序。 */
+function _orderKey(base) { return 'intake_book_order:' + (base || '') }
+function _loadOrder(base) {
+  try { return JSON.parse(localStorage.getItem(_orderKey(base))) || [] } catch { return [] }
+}
+function _saveOrder(base, codes) {
+  try { localStorage.setItem(_orderKey(base), JSON.stringify(codes)) } catch { /* 忽略 */ }
+}
+function _applyOrder(rows, order) {
+  if (!order || !order.length) return rows
+  const idx = c => { const i = order.indexOf(c); return i === -1 ? Infinity : i }
+  return [...rows].sort((a, b) => idx(a.code) - idx(b.code))
+}
+
 /* ── 已连接主控制台 ── */
 function Console({ fail, onDisconnect }) {
   const dialog = useDialog()
@@ -200,6 +215,7 @@ function Console({ fail, onDisconnect }) {
   const [newTitle, setNewTitle] = useState('')
   const [ossMode, setOssMode] = useState('')      // oss | local
   const [toast, setToast] = useState('')          // 成功提示（独立于错误通道）
+  const [dragCode, setDragCode] = useState(null)  // 正在拖拽的书籍 code
 
   // 成功类轻提示：不再复用错误通道，2.4s 自动消失
   const toastTimer = useRef(null)
@@ -210,10 +226,12 @@ function Console({ fail, onDisconnect }) {
   }, [])
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
 
+  const orderBase = api.getIntakeServer().base || window.location.origin
+
   const loadBooks = useCallback(async (keep) => {
     try {
       const data = await api.intakeBooks()
-      setBooks(data.rows)
+      setBooks(_applyOrder(data.rows, _loadOrder(orderBase)))
       setSelected(prev => {
         const want = keep || prev
         if (want && data.rows.some(b => b.code === want)) return want
@@ -222,9 +240,32 @@ function Console({ fail, onDisconnect }) {
     } catch (e) {
       fail(e.message)
     }
-  }, [fail])
+  }, [fail, orderBase])
 
   useEffect(() => { loadBooks() }, [loadBooks])
+
+  /* ── 拖拽排序：拖过即实时换位，松手时把当前顺序持久化到本地 ── */
+  function onCardDragStart(e, code) {
+    setDragCode(code)
+    e.dataTransfer.effectAllowed = 'move'
+  }
+  function onCardDragOver(e, overCode) {
+    e.preventDefault()
+    if (!dragCode || dragCode === overCode) return
+    setBooks(prev => {
+      const from = prev.findIndex(b => b.code === dragCode)
+      const to = prev.findIndex(b => b.code === overCode)
+      if (from === -1 || to === -1 || from === to) return prev
+      const next = [...prev]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      return next
+    })
+  }
+  function onCardDragEnd() {
+    setDragCode(null)
+    setBooks(prev => { _saveOrder(orderBase, prev.map(b => b.code)); return prev })
+  }
   useEffect(() => {
     api.intakeOssConfig().then(d => setOssMode(d.mode)).catch(() => {})
   }, [])
@@ -269,7 +310,7 @@ function Console({ fail, onDisconnect }) {
   const serverBase = api.getIntakeServer().base || window.location.origin
 
   return (
-    <div className="admin-wrap">
+    <div className="admin-wrap connected">
       <div className="admin-top">
         <h2 className="admin-title">投稿管理</h2>
         <span className="server-chip" title={serverBase}>
@@ -301,6 +342,7 @@ function Console({ fail, onDisconnect }) {
             </div>
           )}
 
+          <div className="book-cards">
           {books == null
             ? <div className="admin-empty sm">加载中…</div>
             : books.length === 0
@@ -308,8 +350,14 @@ function Console({ fail, onDisconnect }) {
               : books.map(b => (
                 <div
                   key={b.code}
-                  className={`book-card${b.code === selected ? ' active' : ''}${b.status === 'archived' ? ' archived' : ''}`}
+                  className={`book-card${b.code === selected ? ' active' : ''}${b.status === 'archived' ? ' archived' : ''}${dragCode === b.code ? ' dragging' : ''}`}
+                  draggable
+                  onDragStart={e => onCardDragStart(e, b.code)}
+                  onDragOver={e => onCardDragOver(e, b.code)}
+                  onDragEnd={onCardDragEnd}
+                  onDrop={e => e.preventDefault()}
                   onClick={() => setSelected(b.code)}
+                  title="拖动可调整顺序"
                 >
                   <div className="book-card-top">
                     <span className="book-name">{b.title}</span>
@@ -330,6 +378,7 @@ function Console({ fail, onDisconnect }) {
                   </div>
                 </div>
               ))}
+          </div>
         </aside>
 
         {/* 右：选中书籍详情 */}
@@ -360,6 +409,20 @@ function Console({ fail, onDisconnect }) {
           )}
         </section>
       </div>
+
+      <footer className="admin-footer">
+        <img className="footer-logo" src="/logo.png" alt="星尘远征队" />
+        <div className="footer-text">
+          <a
+            href="https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh"
+            target="_blank"
+            rel="noreferrer"
+          >
+            CC BY-NC-SA 4.0
+          </a>
+          <span className="footer-credit">星尘远征队 出品</span>
+        </div>
+      </footer>
 
       {toast && <div className="admin-toast" role="status">{toast}</div>}
     </div>

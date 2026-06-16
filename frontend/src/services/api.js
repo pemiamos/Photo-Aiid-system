@@ -82,9 +82,26 @@ export async function getPhotos(params = {}) {
   if (params.tag) qs.set('tag', params.tag)
   if (params.q) qs.set('q', params.q)
   if (params.status) qs.set('status', params.status)
+  if (params.category) qs.set('category', params.category)
   if (params.folder_path) qs.set('folder_path', params.folder_path)
+  if (params.limit != null) qs.set('limit', params.limit)
+  if (params.offset != null) qs.set('offset', params.offset)
   const query = qs.toString()
   return request(`/photos${query ? '?' + query : ''}`)
+}
+
+/* ── 已索引文件夹注册表 ── */
+export async function listFolders() {
+  return request('/folders')
+}
+export async function removeFolder(path) {
+  return request('/folders/remove', { method: 'POST', body: JSON.stringify({ path }) })
+}
+export async function clearFolders() {
+  return request('/folders/clear', { method: 'POST' })
+}
+export async function cleanStaleFolders() {
+  return request('/folders/clean-stale', { method: 'POST' })
 }
 
 export async function getPhotoById(id) {

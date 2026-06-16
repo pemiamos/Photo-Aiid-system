@@ -345,10 +345,8 @@ async def scan_directory(
                         # Upsert exif (using shared conn)
                         await db.upsert_exif(photo_id, exif, conn=conn)
 
-                        # CPU bound thumbnail generation
-                        thumb_path = get_thumbnail_path(str(root), relative_path)
-                        await asyncio.to_thread(generate_thumbnail, str(fpath), thumb_path, max_size=thumbnail_max_size)
-
+                        # 缩略图改为「按需生成」：此处不再扫描时全量生成，避免上万张库
+                        # 堆积巨量缓存。首次被 /api/thumbnails/{id} 请求时即时生成并缓存。
                         photo_count += 1
 
                     scan_progress["scanned_files"] += 1

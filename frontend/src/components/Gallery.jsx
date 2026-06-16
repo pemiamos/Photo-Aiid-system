@@ -3,7 +3,7 @@ import { usePhotoStore, usePhotoDispatch, Actions } from '../stores/photoStore'
 import * as api from '../services/api'
 import './Gallery.css'
 
-function PhotoCard({ photo, index, selected, onToggle, suggestedName }) {
+export function PhotoCard({ photo, index, selected, onToggle, suggestedName }) {
   const dispatch = usePhotoDispatch()
   const ai = photo.ai || {}
   const [editing, setEditing] = useState(false)
@@ -174,7 +174,7 @@ function fmtDuration(sec) {
 }
 
 export default function Gallery() {
-  const { photos, settings, activeTag, searchQuery, analysisProgress, engineStatus, selectedIds, submitMode } = usePhotoStore()
+  const { photos, settings, activeTag, searchQuery, analysisProgress, engineStatus, selectedIds, submitMode, renamePreviewNonce } = usePhotoStore()
   const dispatch = usePhotoDispatch()
   const [localQuery, setLocalQuery] = useState('')
   const [batchOpen, setBatchOpen] = useState(false)
@@ -182,6 +182,45 @@ export default function Gallery() {
   const [batchAddTags, setBatchAddTags] = useState('')
 
   const toggleSelect = (id) => dispatch({ type: Actions.TOGGLE_SELECT, payload: id })
+
+  /* ── 拖文件夹进画廊：直接扫描并切到该文件夹展示（Tauri 桌面端可拿到真实路径）── */
+  const [folderDragOver, setFolderDragOver] = useState(false)
+  const onGalleryDragOver = (e) => {
+    if (submitMode) return
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+      setFolderDragOver(true)
+    }
+  }
+  const onGalleryDragLeave = (e) => {
+    // 只在真正离开画廊区域时收起（忽略子元素之间的冒泡）
+    if (e.currentTarget.contains(e.relatedTarget)) return
+    setFolderDragOver(false)
+  }
+  const onGalleryDrop = (e) => {
+    e.preventDefault()
+    setFolderDragOver(false)
+    if (submitMode) return
+    const file = e.dataTransfer.files?.[0]
+    let path = file?.path
+    if (!path) {
+      // 纯浏览器拿不到绝对路径，只有 Tauri/桌面端可用
+      dispatch({ type: Actions.SET_ERROR, payload: '拖拽文件夹需在桌面 App 中使用（浏览器无法获取文件夹路径），请改用侧栏「浏览」。' })
+      return
+    }
+    // 拖的是文件则取其所在目录
+    if (/\.[a-zA-Z0-9]+$/.test(path)) {
+      const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+      if (i > 0) path = path.slice(0, i)
+    }
+    dispatch({ type: Actions.SET_SETTINGS, payload: { folderPath: path } })
+    dispatch({ type: Actions.SET_SCAN_STATUS, payload: 'scanning' })
+    api.scanFolder(path).catch(err => {
+      dispatch({ type: Actions.SET_ERROR, payload: err.message })
+      dispatch({ type: Actions.SET_SCAN_STATUS, payload: 'idle' })
+    })
+  }
 
   const applyBatchEdit = async () => {
     const add_tags = batchAddTags.split(/[,，]/).map(t => t.trim()).filter(Boolean)
@@ -228,11 +267,26 @@ export default function Gallery() {
     () => filteredPhotos.filter(p => p.ai).map(p => p.id),
     [filteredPhotos]
   )
-  const previewKey = `${doneIds.join(',')}|${settings?.template || ''}|${settings?.prefix || ''}`
+  // 注意：key 必须包含影响命名的 ai 内容（摄影师/地点/类别/标签），不能只看 id 列表。
+  // 否则重新分析后照片 id 不变、ai 内容已变，预览却不会重新拉取（会停留在旧名）。
+  const previewKey = useMemo(() => {
+    const sig = filteredPhotos
+      .filter(p => p.ai)
+      .map(p => {
+        const a = p.ai || {}
+        const tags = Array.isArray(a.tags) ? a.tags.join('+') : ''
+        return `${p.id}:${a.photographer || ''}:${a.location || ''}:${a.category || ''}:${tags}`
+      })
+      .join('|')
+    // 末尾带上 nonce：侧栏「刷新」按钮 bump 它即可强制重算（即使其它都没变）。
+    return `${sig}|${settings?.template || ''}|${settings?.prefix || ''}|${renamePreviewNonce}`
+  }, [filteredPhotos, settings?.template, settings?.prefix, renamePreviewNonce])
   useEffect(() => {
     if (doneIds.length === 0) { setPreviewMap({}); return }
     let cancelled = false
-    api.renamePreview({ photo_ids: doneIds })
+    // 关键：把当前模板/前缀一并传给后端，让预览用「侧栏正在编辑的模板」即时计算，
+    // 不再依赖后端数据库里上次同步的旧模板（这正是改字段后画廊不更新的根因）。
+    api.renamePreview({ photo_ids: doneIds, template: settings?.template, prefix: settings?.prefix })
       .then(data => {
         if (cancelled || !data?.entries) return
         const m = {}
@@ -279,7 +333,20 @@ export default function Gallery() {
   const showProgress = engineStatus === 'busy' && analysisProgress
 
   return (
-    <section className="gallery-section">
+    <section
+      className={`gallery-section${folderDragOver ? ' folder-drag' : ''}`}
+      onDragOver={onGalleryDragOver}
+      onDragLeave={onGalleryDragLeave}
+      onDrop={onGalleryDrop}
+    >
+      {folderDragOver && (
+        <div className="folder-drop-overlay">
+          <div className="folder-drop-card">
+            <div className="fdo-icon">📂</div>
+            松开即扫描并展示该文件夹
+          </div>
+        </div>
+      )}
       <div className="search-row">
         <input
           type="text"
