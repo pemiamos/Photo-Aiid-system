@@ -7,6 +7,7 @@ import Gallery from './components/Gallery'
 import IndexTable from './components/IndexTable'
 import SubmitPanel from './components/SubmitPanel'
 import AboutPage from './components/AboutPage'
+import AdminPanel from './components/AdminPanel'
 
 export default function App() {
   const { activeTab, error, settings, scanStatus } = usePhotoStore()
@@ -92,6 +93,7 @@ export default function App() {
           {activeTab === 'index' && <IndexTable />}
           {activeTab === 'submit' && <SubmitPanel />}
           {activeTab === 'about' && <AboutPage />}
+          {activeTab === 'admin' && <AdminPanel />}
         </main>
       </div>
 

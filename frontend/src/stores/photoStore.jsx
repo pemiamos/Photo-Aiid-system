@@ -19,7 +19,7 @@ const initialState = {
   engineStatus: 'idle',       // idle | busy | done | error
   scanStatus: 'idle',         // idle | scanning | done
   analysisProgress: null,     // { current, total } | null
-  activeTab: 'gallery',       // gallery | index | submit | about
+  activeTab: 'gallery',       // gallery | index | submit | about | admin
   submitMode: false,          // 投稿模式：锁定编辑、画廊选片投稿
   activeTag: null,
   selectedIds: [],            // user-selected photo ids for 自选分析

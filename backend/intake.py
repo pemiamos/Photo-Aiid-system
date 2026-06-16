@@ -13,8 +13,10 @@ Photo-Aiid-system · 投稿征稿模块（M2 网页原型）
 """
 
 import base64
+import csv
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -48,7 +50,13 @@ def _admin_cookie_value() -> str:
 def _admin_ok(request: Request) -> bool:
     if not ADMIN_TOKEN:
         return True
-    return request.cookies.get(_ADMIN_COOKIE) == _admin_cookie_value()
+    # ① Web 端旧后台：签名 Cookie
+    cookie = request.cookies.get(_ADMIN_COOKIE) or ""
+    if hmac.compare_digest(cookie, _admin_cookie_value()):
+        return True
+    # ② 桌面 App 远程管理：直接带管理口令请求头（跨域 Cookie 不发送，故用头）
+    header = request.headers.get("x-intake-admin-token") or ""
+    return bool(header) and hmac.compare_digest(header, ADMIN_TOKEN)
 
 
 async def require_admin(request: Request):
@@ -153,6 +161,13 @@ def _assume_role(prefix: str) -> dict:
     }
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS books (
+    code        TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active',   -- active | archived
+    created_at  REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS photographers (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     book_code   TEXT NOT NULL,
@@ -206,13 +221,30 @@ async def init_intake_db():
                 await conn.execute(
                     f"ALTER TABLE submission_files ADD COLUMN {col} TEXT"
                 )
+        now = time.time()
+        # 种入默认画册（来自环境变量，向后兼容单本配置）
+        await conn.execute(
+            "INSERT OR IGNORE INTO books (code, title, status, created_at) "
+            "VALUES (?, ?, 'active', ?)",
+            (BOOK_CODE, BOOK_TITLE, now),
+        )
+        # 老库迁移：把 photographers 里出现过、但 books 表还没有的 book_code 补登记
+        legacy = await conn.execute_fetchall(
+            "SELECT DISTINCT book_code FROM photographers "
+            "WHERE book_code NOT IN (SELECT code FROM books)"
+        )
+        for r in legacy:
+            await conn.execute(
+                "INSERT OR IGNORE INTO books (code, title, status, created_at) "
+                "VALUES (?, ?, 'active', ?)",
+                (r["book_code"], r["book_code"], now),
+            )
         # demo 种子：A03 王芳 故意不投稿，用于看板展示「未交」
         seed = [
             ("A01", "张伟", "13800000001"),
             ("A02", "李娜", "13800000002"),
             ("A03", "王芳", "13800000003"),
         ]
-        now = time.time()
         for code, name, contact in seed:
             await conn.execute(
                 "INSERT OR IGNORE INTO photographers "
@@ -234,22 +266,49 @@ def _safe(part: str) -> str:
 
 
 async def _get_photographer(code: str):
+    # 投稿码全局唯一，按码直接定位摄影师；其所属画册由 book_code 字段携带，
+    # 因此同一台后端可同时承接多本画册的投稿。
     conn = await db.get_db()
     try:
         row = await conn.execute_fetchall(
-            "SELECT * FROM photographers WHERE invite_code = ? AND book_code = ?",
-            (code, BOOK_CODE),
+            "SELECT * FROM photographers WHERE invite_code = ?", (code,)
         )
         return dict(row[0]) if row else None
     finally:
         await conn.close()
 
 
-async def _next_code(conn, book_code: str) -> str:
-    """按 A01、A02… 生成下一个可用投稿码（跳过已存在的最大序号）。"""
+async def _book_title(conn, code: str) -> str:
     rows = await conn.execute_fetchall(
-        "SELECT invite_code FROM photographers WHERE book_code = ?", (book_code,)
+        "SELECT title FROM books WHERE code = ?", (code,)
     )
+    return rows[0]["title"] if rows else code
+
+
+async def _default_book(conn) -> str:
+    """未指定画册时的兜底：最近创建的 active 画册，否则环境默认。"""
+    rows = await conn.execute_fetchall(
+        "SELECT code FROM books WHERE status = 'active' "
+        "ORDER BY created_at DESC LIMIT 1"
+    )
+    return rows[0]["code"] if rows else BOOK_CODE
+
+
+async def _resolve_book(conn, book: str) -> str:
+    book = (book or "").strip()
+    if book:
+        return book
+    return await _default_book(conn)
+
+
+async def _next_code(conn, book_code: str = "") -> str:
+    """生成下一个 A01、A02… 投稿码。
+
+    invite_code 在全库唯一，因此序号按全局最大值递增（而非按画册），
+    多本画册共用一条不重复的序列，避免跨画册撞码。book_code 参数保留
+    以兼容调用方，当前不参与计算。
+    """
+    rows = await conn.execute_fetchall("SELECT invite_code FROM photographers")
     mx = 0
     for r in rows:
         m = re.match(r"^A(\d+)$", r["invite_code"] or "")
@@ -288,6 +347,7 @@ async def verify(code: str = Form(...)):
             "GROUP BY sf.content_label ORDER BY last_at DESC",
             (p["id"],),
         )
+        book_title = await _book_title(conn, p["book_code"])
     finally:
         await conn.close()
 
@@ -301,7 +361,7 @@ async def verify(code: str = Form(...)):
     ]
     return {
         "ok": True,
-        "book_title": BOOK_TITLE,
+        "book_title": book_title,
         "name": p["name"],
         "total": sum(h["count"] for h in history),
         "history": history,
@@ -347,22 +407,37 @@ def _merge_label_into_tags(label, tags_raw):
 
 
 async def _insert_file(conn, submission_id, label, object_key, file_name, size, meta):
-    """写入一条照片记录，含可选的本地 AI 索引字段。"""
+    """写入一条照片记录，含可选的本地 AI 索引字段。
+
+    按 object_key 去重：object_key = {书}/{投稿码-姓名}/{标注}/{文件名}，对同一张
+    照片是确定且唯一的。摄影师若重复提交（如上传中误点多次），同一 object_key 在 OSS
+    里是覆盖、在库里也只更新这一行而非新增，避免张数被重复计数。
+    """
     merged_tags = _merge_label_into_tags(label, meta.get("tags"))
+    cols = (
+        meta.get("photographer") or None,
+        meta.get("location") or None,
+        meta.get("category") or None,
+        meta.get("description") or None,
+        merged_tags,
+    )
+    existing = await conn.execute_fetchall(
+        "SELECT id FROM submission_files WHERE object_key = ?", (object_key,)
+    )
+    if existing:
+        await conn.execute(
+            "UPDATE submission_files SET submission_id=?, content_label=?, file_name=?, "
+            "file_size=?, photographer=?, location=?, category=?, description=?, tags=?, "
+            "status='done', created_at=? WHERE object_key=?",
+            (submission_id, label, file_name, size, *cols, time.time(), object_key),
+        )
+        return
     await conn.execute(
         "INSERT INTO submission_files "
         "(submission_id, content_label, object_key, file_name, file_size, "
         " photographer, location, category, description, tags, status, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'done', ?)",
-        (
-            submission_id, label, object_key, file_name, size,
-            meta.get("photographer") or None,
-            meta.get("location") or None,
-            meta.get("category") or None,
-            meta.get("description") or None,
-            merged_tags,
-            time.time(),
-        ),
+        (submission_id, label, object_key, file_name, size, *cols, time.time()),
     )
 
 
@@ -384,7 +459,7 @@ async def upload(
     conn = await db.get_db()
     try:
         rows = await conn.execute_fetchall(
-            "SELECT s.id, p.invite_code, p.name FROM submissions s "
+            "SELECT s.id, p.invite_code, p.name, p.book_code FROM submissions s "
             "JOIN photographers p ON s.photographer_id = p.id WHERE s.id = ?",
             (submission_id,),
         )
@@ -392,7 +467,7 @@ async def upload(
             raise HTTPException(404, "投稿会话不存在")
         sub = rows[0]
 
-        prefix = _photographer_prefix(sub["invite_code"], sub["name"])
+        prefix = _photographer_prefix(sub["invite_code"], sub["name"], sub["book_code"])
         rel_key = f"{prefix}{label}/{_safe(file.filename)}"
         dest = INTAKE_DATA / rel_key
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -414,10 +489,10 @@ async def upload(
         await conn.close()
 
 
-def _photographer_prefix(invite_code: str, name: str) -> str:
+def _photographer_prefix(invite_code: str, name: str, book_code: str = "") -> str:
     """该摄影师在桶内的可写前缀：{book}/{投稿码-姓名}/"""
     folder = f"{_safe(invite_code)}-{_safe(name)}"
-    return f"{BOOK_CODE}/{folder}/"
+    return f"{_safe(book_code) if book_code else BOOK_CODE}/{folder}/"
 
 
 @router.get("/api/intake/oss-config")
@@ -436,7 +511,7 @@ async def sts(code: str = Form(...)):
     p = await _get_photographer(_safe(code).upper())
     if not p:
         raise HTTPException(404, "投稿码无效")
-    prefix = _photographer_prefix(p["invite_code"], p["name"])
+    prefix = _photographer_prefix(p["invite_code"], p["name"], p["book_code"])
     creds = _assume_role(prefix)
     return {
         "ok": True,
@@ -466,13 +541,14 @@ async def record(
     conn = await db.get_db()
     try:
         rows = await conn.execute_fetchall(
-            "SELECT p.invite_code, p.name FROM submissions s "
+            "SELECT p.invite_code, p.name, p.book_code FROM submissions s "
             "JOIN photographers p ON s.photographer_id = p.id WHERE s.id = ?",
             (submission_id,),
         )
         if not rows:
             raise HTTPException(404, "投稿会话不存在")
-        prefix = _photographer_prefix(rows[0]["invite_code"], rows[0]["name"])
+        prefix = _photographer_prefix(
+            rows[0]["invite_code"], rows[0]["name"], rows[0]["book_code"])
         if not object_key.startswith(prefix):
             raise HTTPException(403, "object_key 越权，不在该摄影师前缀内")
         await _insert_file(
@@ -501,14 +577,145 @@ async def complete(submission_id: int = Form(...)):
 
 
 # ---------------------------------------------------------------------------
+# 编辑端：画册项目管理
+#
+# 一台后端可承接多本画册（每本一个征稿项目）。投稿码全局唯一并归属某画册，
+# 因此摄影师投稿无需选画册，编辑端则按画册分别查看看板与投稿码。
+# ---------------------------------------------------------------------------
+
+def _book_slug(s: str) -> str:
+    """画册 code 规整：仅保留字母数字与 - _，转小写，作为存储前缀的一段。"""
+    s = re.sub(r"[^0-9A-Za-z_-]+", "-", (s or "").strip()).strip("-_").lower()
+    return s
+
+
+@router.get("/api/intake/admin/books")
+async def list_books(_: None = Depends(require_admin)):
+    """列出全部画册（新建在前），含每本的征稿统计。"""
+    conn = await db.get_db()
+    try:
+        books = await conn.execute_fetchall(
+            "SELECT code, title, status, created_at FROM books "
+            "ORDER BY (status='archived'), created_at DESC"
+        )
+        result = []
+        for b in books:
+            stat = await conn.execute_fetchall(
+                "SELECT COUNT(DISTINCT p.id) AS people, "
+                "       COUNT(sf.id) AS files, "
+                "       COALESCE(SUM(sf.file_size), 0) AS bytes, "
+                "       COUNT(DISTINCT CASE WHEN sf.id IS NOT NULL THEN p.id END) AS submitted "
+                "FROM photographers p "
+                "LEFT JOIN submissions s ON s.photographer_id = p.id "
+                "LEFT JOIN submission_files sf ON sf.submission_id = s.id "
+                "WHERE p.book_code = ?",
+                (b["code"],),
+            )
+            st = stat[0] if stat else {}
+            result.append({
+                "code": b["code"],
+                "title": b["title"],
+                "status": b["status"],
+                "created_at": b["created_at"],
+                "created": time.strftime("%Y-%m-%d", time.localtime(b["created_at"])),
+                "people": st["people"] or 0,
+                "submitted": st["submitted"] or 0,
+                "files": st["files"] or 0,
+                "mb": round((st["bytes"] or 0) / 1024 / 1024, 1),
+            })
+        return {"rows": result}
+    finally:
+        await conn.close()
+
+
+@router.post("/api/intake/admin/books")
+async def create_book(
+    title: str = Form(...),
+    code: str = Form(""),
+    _: None = Depends(require_admin),
+):
+    """新建一本画册（征稿项目）。code 留空则由标题自动生成。"""
+    title = title.strip()
+    if not title:
+        raise HTTPException(400, "画册名称不能为空")
+    code = _book_slug(code) or _book_slug(title)
+    if not code:
+        # 标题全为中文等无法 slug 化时，用时间戳兜底
+        code = "book-" + time.strftime("%Y%m%d-%H%M%S")
+    conn = await db.get_db()
+    try:
+        exists = await conn.execute_fetchall(
+            "SELECT 1 FROM books WHERE code = ?", (code,)
+        )
+        if exists:
+            raise HTTPException(409, f"画册编号 {code} 已存在")
+        await conn.execute(
+            "INSERT INTO books (code, title, status, created_at) "
+            "VALUES (?, ?, 'active', ?)",
+            (code, title, time.time()),
+        )
+        await conn.commit()
+        return {"ok": True, "code": code, "title": title}
+    finally:
+        await conn.close()
+
+
+@router.post("/api/intake/admin/books/{code}/status")
+async def set_book_status(
+    code: str,
+    status: str = Form(...),
+    _: None = Depends(require_admin),
+):
+    """归档 / 恢复画册。归档只改状态，不影响已有投稿数据。"""
+    if status not in ("active", "archived"):
+        raise HTTPException(400, "status 仅支持 active / archived")
+    conn = await db.get_db()
+    try:
+        cur = await conn.execute(
+            "UPDATE books SET status = ? WHERE code = ?", (status, code)
+        )
+        await conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "画册不存在")
+        return {"ok": True, "code": code, "status": status}
+    finally:
+        await conn.close()
+
+
+@router.patch("/api/intake/admin/books/{code}")
+async def rename_book(
+    code: str,
+    title: str = Form(...),
+    _: None = Depends(require_admin),
+):
+    """重命名画册标题（编号不变，前缀与历史数据不受影响）。"""
+    title = title.strip()
+    if not title:
+        raise HTTPException(400, "画册名称不能为空")
+    conn = await db.get_db()
+    try:
+        cur = await conn.execute(
+            "UPDATE books SET title = ? WHERE code = ?", (title, code)
+        )
+        await conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "画册不存在")
+        return {"ok": True, "code": code, "title": title}
+    finally:
+        await conn.close()
+
+
+# ---------------------------------------------------------------------------
 # 编辑端：征稿看板
 # ---------------------------------------------------------------------------
 
 @router.get("/api/intake/admin/submissions")
-async def admin_submissions(_: None = Depends(require_admin)):
-    """看板数据：每位摄影师交了多少、未交名单。"""
+async def admin_submissions(book: str = "", _: None = Depends(require_admin)):
+    """看板数据：某画册下每位摄影师交了多少、未交名单。"""
     conn = await db.get_db()
     try:
+        book_code = await _resolve_book(conn, book)
+        book_title = await _book_title(conn, book_code)
         rows = await conn.execute_fetchall(
             "SELECT p.invite_code, p.name, "
             "       COUNT(sf.id) AS files, "
@@ -518,7 +725,7 @@ async def admin_submissions(_: None = Depends(require_admin)):
             "LEFT JOIN submission_files sf ON sf.submission_id = s.id "
             "WHERE p.book_code = ? "
             "GROUP BY p.id ORDER BY p.invite_code",
-            (BOOK_CODE,),
+            (book_code,),
         )
         result = []
         for r in rows:
@@ -543,11 +750,15 @@ async def admin_submissions(_: None = Depends(require_admin)):
     finally:
         await conn.close()
 
+    total_files = sum(x["files"] for x in result)
+    total_mb = round(sum(x["mb"] for x in result), 1)
     return {
-        "book_code": BOOK_CODE,
-        "book_title": BOOK_TITLE,
+        "book_code": book_code,
+        "book_title": book_title,
         "total_photographers": len(result),
         "submitted": sum(1 for x in result if x["submitted"]),
+        "total_files": total_files,
+        "total_mb": total_mb,
         "rows": result,
     }
 
@@ -558,6 +769,12 @@ async def admin_submissions(_: None = Depends(require_admin)):
 # 注意：以下管理接口在原型阶段未加鉴权，仅供本机/内网使用。对外暴露前
 # 必须加管理员认证（见 PRD 第 7 章安全约束）。
 # ---------------------------------------------------------------------------
+
+@router.get("/api/intake/admin/ping")
+async def admin_ping(_: None = Depends(require_admin)):
+    """连通性探测：桌面 App 用「服务器地址 + 管理口令头」验证能否远程管理。"""
+    return {"ok": True, "oss": _oss_configured()}
+
 
 @router.post("/api/intake/admin/login")
 async def admin_login(response: Response, password: str = Form(...)):
@@ -580,10 +797,12 @@ async def admin_logout(response: Response):
 
 
 @router.get("/api/intake/admin/codes")
-async def list_codes(_: None = Depends(require_admin)):
-    """列出本书所有投稿码及其投稿状态。"""
+async def list_codes(book: str = "", _: None = Depends(require_admin)):
+    """列出某画册所有投稿码及其投稿状态。"""
     conn = await db.get_db()
     try:
+        book_code = await _resolve_book(conn, book)
+        book_title = await _book_title(conn, book_code)
         rows = await conn.execute_fetchall(
             "SELECT p.id, p.invite_code, p.name, p.contact, "
             "       COUNT(sf.id) AS files "
@@ -592,11 +811,11 @@ async def list_codes(_: None = Depends(require_admin)):
             "LEFT JOIN submission_files sf ON sf.submission_id = s.id "
             "WHERE p.book_code = ? "
             "GROUP BY p.id ORDER BY p.invite_code",
-            (BOOK_CODE,),
+            (book_code,),
         )
         return {
-            "book_code": BOOK_CODE,
-            "book_title": BOOK_TITLE,
+            "book_code": book_code,
+            "book_title": book_title,
             "rows": [
                 {
                     "id": r["id"],
@@ -618,15 +837,17 @@ async def create_code(
     name: str = Form(...),
     contact: str = Form(""),
     code: str = Form(""),
+    book: str = Form(""),
     _: None = Depends(require_admin),
 ):
-    """新增一位摄影师并分配投稿码（code 留空则自动生成）。"""
+    """在指定画册下新增一位摄影师并分配投稿码（code 留空则自动生成）。"""
     name = name.strip()
     if not name:
         raise HTTPException(400, "姓名不能为空")
     conn = await db.get_db()
     try:
-        invite = _safe(code).upper() if code.strip() else await _next_code(conn, BOOK_CODE)
+        book_code = await _resolve_book(conn, book)
+        invite = _safe(code).upper() if code.strip() else await _next_code(conn, book_code)
         exists = await conn.execute_fetchall(
             "SELECT 1 FROM photographers WHERE invite_code = ?", (invite,)
         )
@@ -636,7 +857,7 @@ async def create_code(
             "INSERT INTO photographers "
             "(book_code, invite_code, name, contact, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (BOOK_CODE, invite, name, contact.strip(), time.time()),
+            (book_code, invite, name, contact.strip(), time.time()),
         )
         await conn.commit()
         return {"ok": True, "id": cur.lastrowid, "code": invite, "name": name}
@@ -645,21 +866,26 @@ async def create_code(
 
 
 @router.post("/api/intake/admin/codes/batch")
-async def create_codes_batch(names: str = Form(...), _: None = Depends(require_admin)):
-    """批量新增：每行一个姓名，自动分配连续投稿码。"""
+async def create_codes_batch(
+    names: str = Form(...),
+    book: str = Form(""),
+    _: None = Depends(require_admin),
+):
+    """批量新增：每行一个姓名，在指定画册下自动分配连续投稿码。"""
     created = []
     conn = await db.get_db()
     try:
+        book_code = await _resolve_book(conn, book)
         for line in names.splitlines():
             nm = line.strip()
             if not nm:
                 continue
-            invite = await _next_code(conn, BOOK_CODE)
+            invite = await _next_code(conn, book_code)
             await conn.execute(
                 "INSERT INTO photographers "
                 "(book_code, invite_code, name, contact, created_at) "
                 "VALUES (?, ?, ?, '', ?)",
-                (BOOK_CODE, invite, nm, time.time()),
+                (book_code, invite, nm, time.time()),
             )
             await conn.commit()  # 逐条提交，确保 _next_code 看到最新序号
             created.append({"code": invite, "name": nm})
@@ -687,6 +913,74 @@ async def delete_code(pid: int, _: None = Depends(require_admin)):
         return {"ok": True}
     finally:
         await conn.close()
+
+
+@router.get("/api/intake/admin/export.csv")
+async def export_codes_csv(
+    book: str = "",
+    base: str = "",
+    _: None = Depends(require_admin),
+):
+    """一键导出投稿码花名册为 CSV（含 UTF-8 BOM，Excel 直接打开）。
+
+    book 留空 → 导出全部画册；指定 → 仅该画册。base 为投稿页对外地址，
+    用于拼出每位摄影师的专属投稿链接列（留空则不含域名，只给相对路径）。
+    """
+    base = (base or "").strip().rstrip("/")
+    conn = await db.get_db()
+    try:
+        if book.strip():
+            where, params = "WHERE p.book_code = ?", (book.strip(),)
+            fname_book = book.strip()
+        else:
+            where, params = "", ()
+            fname_book = "all"
+        rows = await conn.execute_fetchall(
+            "SELECT b.title AS book_title, p.book_code, p.invite_code, "
+            "       p.name, p.contact, "
+            "       COUNT(sf.id) AS files, "
+            "       COALESCE(SUM(sf.file_size), 0) AS bytes "
+            "FROM photographers p "
+            "LEFT JOIN books b ON b.code = p.book_code "
+            "LEFT JOIN submissions s ON s.photographer_id = p.id "
+            "LEFT JOIN submission_files sf ON sf.submission_id = s.id "
+            f"{where} "
+            "GROUP BY p.id ORDER BY p.book_code, p.invite_code",
+            params,
+        )
+    finally:
+        await conn.close()
+
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM：让 Excel 以 UTF-8 解析中文
+    w = csv.writer(buf)
+    w.writerow(["画册", "画册编号", "投稿码", "姓名", "联系方式",
+                "状态", "已交张数", "容量(MB)", "专属投稿链接"])
+    for r in rows:
+        link = f"{base}/intake?code={r['invite_code']}" if base else \
+               f"/intake?code={r['invite_code']}"
+        w.writerow([
+            r["book_title"] or r["book_code"],
+            r["book_code"],
+            r["invite_code"],
+            r["name"] or "",
+            r["contact"] or "",
+            "已交" if r["files"] > 0 else "未交",
+            r["files"],
+            round((r["bytes"] or 0) / 1024 / 1024, 1),
+            link,
+        ])
+
+    stamp = time.strftime("%Y%m%d")
+    filename = f"投稿码花名册_{fname_book}_{stamp}.csv"
+    quoted = urllib.parse.quote(filename)
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quoted}",
+        },
+    )
 
 
 @router.get("/intake/admin/codes", response_class=HTMLResponse)

@@ -1,0 +1,16 @@
+[Unit]
+Description=Photo-Aiid 征稿云端后端 (intake_server)
+After=network.target
+
+[Service]
+Type=simple
+# __APP_DIR__ 由 deploy-server.sh 替换为后端代码目录（含 intake_server.py）
+WorkingDirectory=__APP_DIR__
+ExecStart=__APP_DIR__/.venv/bin/uvicorn intake_server:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+# 让 .env 与默认相对路径（photo_aiid.db / intake_data）落在 WorkingDirectory 下
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

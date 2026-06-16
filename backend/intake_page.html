@@ -104,7 +104,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/ali-oss@6.18.1/dist/aliyun-oss-sdk.min.js"></script>
 <script>
-  var state = { code: null, photos: [], ossMode: null };
+  var state = { code: null, photos: [], ossMode: null, uploading: false };
   var idSeq = 0;
 
   // 启动即查询上传模式：配置了 OSS 走浏览器直传，否则经后端本地直存
@@ -129,9 +129,23 @@
   $('name').addEventListener('keydown', function(e){ if(e.key==='Enter') verify(); });
   $('name').addEventListener('blur', verify);
 
+  // 仅凭投稿码预取所属画册名，让摄影师一打开就看到「给哪本书投稿」（不涉及姓名校验）
+  function peekBook(){
+    var code = $('code').value.trim();
+    if(!code) return;
+    var fd = new FormData(); fd.append('code', code);
+    fetch('/api/intake/verify', { method:'POST', body:fd })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        if(d && d.book_title){ $('bookTitle').textContent = '《'+d.book_title+'》照片征稿'; }
+      })
+      .catch(function(){});
+  }
+  $('code').addEventListener('change', peekBook);
+
   // 从投稿链接 ?code=A01 自动带入投稿码，聚焦到姓名输入（待摄影师填姓名后校验）
   var urlCode = new URLSearchParams(location.search).get('code');
-  if(urlCode){ $('code').value = urlCode; $('name').focus(); }
+  if(urlCode){ $('code').value = urlCode; $('name').focus(); peekBook(); }
 
   function verify(){
     var code = $('code').value.trim();
@@ -223,6 +237,8 @@
     selCount.textContent = '已选 '+selected+' 张';
     applyBtn.disabled = selected===0 || !labelInput.value.trim();
 
+    // 上传进行中：始终保持提交按钮禁用，避免进度回调里的 render() 把它重新启用导致重复投稿
+    if(state.uploading){ setSubmit(false, '上传中…'); return; }
     if(state.photos.length===0){ setSubmit(false, '请先拉入照片'); return; }
     if(todo>0){ setSubmit(false, '还有 '+todo+' 张未标注，无法提交'); return; }
     if(!license.checked){ setSubmit(false, '请先勾选版权授权'); return; }
@@ -237,7 +253,8 @@
 
   // ---- 提交：创建会话 →（OSS 直传 or 本地上传）→ 完成 ----
   submit.addEventListener('click', function(){
-    if(submit.disabled) return;
+    if(submit.disabled || state.uploading) return;
+    state.uploading = true;
     submit.disabled = true; submit.textContent = '上传中…';
 
     var fd = new FormData();
@@ -255,10 +272,14 @@
         return fetch('/api/intake/complete', { method:'POST', body:fd2 });
       })
       .then(function(){
+        state.uploading = false;
         setSubmit(false, '✓ 投稿成功，共 '+state.photos.length+' 张');
         submit.style.color = 'var(--ok)';
       })
-      .catch(function(err){ setSubmit(true, (err && err.message || '上传失败')+'，点击重试'); });
+      .catch(function(err){
+        state.uploading = false;
+        setSubmit(true, (err && err.message || '上传失败')+'，点击重试');
+      });
   });
 
   // 取临时凭证并创建 OSS 客户端（凭证将过期时自动续签）

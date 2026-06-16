@@ -1,0 +1,7 @@
+# 征稿云端精简后端依赖（intake_server.py 用）。
+# 不含 pillow/exifread/reverse_geocoder 等本机照片处理依赖，装机更轻更快。
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+aiosqlite>=0.19.0
+httpx>=0.25.0
+python-multipart>=0.0.6

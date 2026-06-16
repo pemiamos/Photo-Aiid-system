@@ -5,6 +5,7 @@ const TABS = [
   { key: 'gallery', label: '画廊' },
   { key: 'index',   label: '索引表' },
   { key: 'about',   label: '使用教程' },
+  { key: 'admin',   label: '投稿管理' },
 ]
 
 const STATUS_TEXT = {
