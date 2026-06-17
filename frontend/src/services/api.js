@@ -90,6 +90,12 @@ export async function getPhotos(params = {}) {
   return request(`/photos${query ? '?' + query : ''}`)
 }
 
+// 加载整个画廊（不分页）。不显式传 limit 时后端默认只返回 200 张，
+// 这里用一个足够大的上限把当前文件夹的全部照片一次取回。
+export async function getAllPhotos(params = {}) {
+  return getPhotos({ limit: 100000, ...params })
+}
+
 /* ── 已索引文件夹注册表 ── */
 export async function listFolders() {
   return request('/folders')

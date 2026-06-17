@@ -54,3 +54,25 @@
 .about-content p {
   margin-bottom: 8px;
 }
+
+/* 重点推荐区块（历史索引）：琥珀描边卡片，第一眼抓住普通用户 */
+.about-highlight {
+  margin: 14px 0 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--amber);
+  border-radius: 10px;
+  background: rgba(232, 163, 61, .06);
+}
+.about-highlight h3 {
+  color: var(--amber);
+  font-size: 15px;
+  margin: 0 0 8px;
+}
+.about-highlight p { margin-bottom: 6px; }
+.about-highlight ul { margin: 4px 0; }
+.about-tip {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--faint);
+}
+.about-tip b { color: var(--muted); }

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { usePhotoStore, usePhotoDispatch, Actions } from '../stores/photoStore'
 import * as api from '../services/api'
 import './Gallery.css'
@@ -231,7 +231,7 @@ export default function Gallery() {
         location: batchLoc.trim() || null,
         add_tags: add_tags.length ? add_tags : null,
       })
-      const data = await api.getPhotos({ folder_path: settings?.folderPath || '' })
+      const data = await api.getAllPhotos({ folder_path: settings?.folderPath || '' })
       if (data?.photos) dispatch({ type: Actions.SET_PHOTOS, payload: data.photos })
       setBatchLoc(''); setBatchAddTags(''); setBatchOpen(false)
     } catch (err) {
@@ -297,6 +297,31 @@ export default function Gallery() {
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewKey])
+
+  // ── 渐进式渲染（避免一次性挂载上千张卡片导致卡顿）──
+  // 数据已全部加载在 filteredPhotos 中（全选/搜索/过滤都作用于完整集合），
+  // 这里只控制实际挂载到 DOM 的卡片数量：初始一批，滚动接近底部时再追加。
+  const GALLERY_CHUNK = 120
+  const [visibleCount, setVisibleCount] = useState(GALLERY_CHUNK)
+  const sentinelRef = useRef(null)
+  // 过滤结果变化时（切文件夹/搜索/标签）重置回第一批。
+  useEffect(() => { setVisibleCount(GALLERY_CHUNK) }, [filteredPhotos])
+  // 哨兵进入视口附近就追加一批，直到铺满当前过滤集合。
+  useEffect(() => {
+    const el = sentinelRef.current
+    if (!el) return
+    const io = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        setVisibleCount(c => Math.min(c + GALLERY_CHUNK, filteredPhotos.length))
+      }
+    }, { rootMargin: '800px 0px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [filteredPhotos.length, visibleCount])
+  const visiblePhotos = useMemo(
+    () => filteredPhotos.slice(0, visibleCount),
+    [filteredPhotos, visibleCount]
+  )
 
   const handleSearch = (e) => {
     setLocalQuery(e.target.value)
@@ -452,18 +477,25 @@ export default function Gallery() {
           <span>在左侧输入文件夹路径并扫描，AI 将自动识别内容、提取 EXIF、生成标签与建议文件名</span>
         </div>
       ) : (
-        <div className="gallery-grid">
-          {filteredPhotos.map((photo, i) => (
-            <PhotoCard
-              key={photo.id}
-              photo={photo}
-              index={i}
-              selected={selectedIds.includes(photo.id)}
-              onToggle={toggleSelect}
-              suggestedName={previewMap[photo.id]}
-            />
-          ))}
-        </div>
+        <>
+          <div className="gallery-grid">
+            {visiblePhotos.map((photo, i) => (
+              <PhotoCard
+                key={photo.id}
+                photo={photo}
+                index={i}
+                selected={selectedIds.includes(photo.id)}
+                onToggle={toggleSelect}
+                suggestedName={previewMap[photo.id]}
+              />
+            ))}
+          </div>
+          {visibleCount < filteredPhotos.length && (
+            <div ref={sentinelRef} className="gallery-sentinel">
+              正在加载更多…（{visibleCount} / {filteredPhotos.length}）
+            </div>
+          )}
+        </>
       )}
     </section>
   )

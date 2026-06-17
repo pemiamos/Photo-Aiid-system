@@ -247,7 +247,7 @@ async def clean_stale_folders():
 @app.get("/api/photos")
 async def list_photos(
     offset: int = Query(0, ge=0),
-    limit: int = Query(200, ge=1, le=2000),
+    limit: int = Query(200, ge=1, le=100000),
     status: str | None = None,
     category: str | None = None,
     tag: str | None = None,
@@ -504,7 +504,7 @@ async def rename_preview(req: RenameRequest):
 
 @app.get("/api/search")
 async def search_keyword(q: str = Query(..., min_length=1)):
-    photos, total = await db.get_photos(limit=200, search=q)
+    photos, total = await db.get_photos(limit=100000, search=q)
     return {"photos": photos, "total": total, "query": q}
 
 

@@ -64,7 +64,7 @@ export default function App() {
   // that, no matter how the scan polling raced, the gallery ends up showing the
   // photos for the current folder once scanning completes.
   useEffect(() => {
-    api.getPhotos({ folder_path: settings?.folderPath || '' })
+    api.getAllPhotos({ folder_path: settings?.folderPath || '' })
       .then(data => {
         if (data && data.photos) {
           dispatch({ type: Actions.SET_PHOTOS, payload: data.photos })

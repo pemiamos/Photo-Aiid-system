@@ -288,7 +288,7 @@ export default function Sidebar() {
         const progress = await api.getScanProgress()
 
         // Load scanned photos in real-time
-        const photoRes = await api.getPhotos({ folder_path: settings.folderPath })
+        const photoRes = await api.getAllPhotos({ folder_path: settings.folderPath })
         if (photoRes && photoRes.photos) {
           dispatch({ type: Actions.SET_PHOTOS, payload: photoRes.photos })
         }
@@ -346,7 +346,7 @@ export default function Sidebar() {
             }
           })
           // Poll photos to update cards dynamically
-          const photoRes = await api.getPhotos({ folder_path: settings.folderPath })
+          const photoRes = await api.getAllPhotos({ folder_path: settings.folderPath })
           if (photoRes && photoRes.photos) {
             dispatch({ type: Actions.SET_PHOTOS, payload: photoRes.photos })
           }
@@ -358,7 +358,7 @@ export default function Sidebar() {
           // the grace window — finish up and refresh once.
           dispatch({ type: Actions.SET_ENGINE_STATUS, payload: 'done' })
           dispatch({ type: Actions.SET_ANALYSIS_PROGRESS, payload: null })
-          const photoRes = await api.getPhotos({ folder_path: settings.folderPath })
+          const photoRes = await api.getAllPhotos({ folder_path: settings.folderPath })
           if (photoRes && photoRes.photos) {
             dispatch({ type: Actions.SET_PHOTOS, payload: photoRes.photos })
           }

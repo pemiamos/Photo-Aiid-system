@@ -108,7 +108,7 @@ export default function IndexTable() {
       const ids = analyzablePhotos.map(p => p.id)
       const data = await api.renamePhotos({ photo_ids: ids })
       alert(`重命名完成：成功 ${data.success}，失败 ${data.failed}`)
-      const res = await api.getPhotos({ folder_path: settings?.folderPath || '' })
+      const res = await api.getAllPhotos({ folder_path: settings?.folderPath || '' })
       if (res?.photos) dispatch({ type: Actions.SET_PHOTOS, payload: res.photos })
     } catch (err) {
       dispatch({ type: Actions.SET_ERROR, payload: err.message })

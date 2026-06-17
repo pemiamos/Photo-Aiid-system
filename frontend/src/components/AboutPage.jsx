@@ -5,7 +5,31 @@ export default function AboutPage() {
     <section className="about-section">
       <div className="about-content">
         <h2>使用教程</h2>
-        <p>AI 智能照片管理与批量处理系统。下面按「配置引擎 → 使用流程 → 常见问题」介绍。</p>
+        <p>
+          Photo-Aiid-system 是一款 AI 照片管理工具：自动识别照片内容、批量重命名，
+          还能<b>跨整个照片库一键找图</b>。如果你只是想把照片管好、随时找得到，先看下面这块👇
+        </p>
+
+        {/* 重点推荐：历史索引（面向普通用户） */}
+        <div className="about-highlight">
+          <h3>🕘 历史索引 —— 找照片，不用再记它在哪个文件夹</h3>
+          <p>
+            <b>这是最适合普通用户的功能。</b>照片平时散在一堆文件夹里，时间一长根本记不清
+            「那张照片到底放哪了」。只要照片<b>曾经被本软件分析过</b>，它就会一直留在「历史档案」里——
+            打开<b>「索引表」标签 → 点右上角「🕘 历史索引」</b>，输入关键词就能
+            <b>跨所有文件夹</b>一次性搜出来。
+          </p>
+          <p>比如直接搜：</p>
+          <ul>
+            <li>「<b>南京</b>」「<b>日落</b>」「<b>外婆</b>」——按地点 / 标签 / 摄影师 / 文件名秒搜</li>
+            <li>不想打字？搜索框下方有<b>最近搜过的词</b>和<b>整库最常见的标签</b>，点一下就搜</li>
+            <li>结果像相册一样瀑布平铺，缩略图随用随取，<b>几万张照片也不卡</b></li>
+          </ul>
+          <p className="about-tip">
+            💡 小贴士：从 v3.1 起，换文件夹<b>不会再清空</b>历史——你浏览、分析过的每个文件夹都会
+            <b>累积进库</b>，用得越久、能搜的越多。要搜某批照片，记得先「浏览」并「分析」过它所在的文件夹。
+          </p>
+        </div>
 
         <h2>1. 接入 AI 引擎（API Key）</h2>
         <p>
@@ -48,16 +72,24 @@ export default function AboutPage() {
           <li><b>批量重命名</b>：用字段块（如 <code>[摄影师]_[地点]_[标签]</code>）拼出规则，预览无误后执行；自动去重、自动记日志。</li>
           <li><b>导出原图</b>：在画廊把缩略图<b>直接拖拽到桌面或文件夹</b>，即可复制出（重命名后的）原图。</li>
           <li><b>导出索引</b>：在「索引表」一键导出 CSV，Excel / Numbers 可直接打开。</li>
-          <li><b>历史索引</b> ⭐：在「索引表」点右上角「🕘 历史索引」，<b>跨所有分析过的文件夹</b>按摄影师 / 地点 / 标签 / 类别 / 文件名一键搜索——不必记得照片存在哪个文件夹，曾经分析过的随时都能搜出来，最适合日常管理整库照片。</li>
+          <li><b>历史索引</b> ⭐：跨所有分析过的文件夹一键找图——详见本页顶部的重点介绍。</li>
         </ol>
 
         <h2>3. 数据存放位置</h2>
         <p>数据库与缩略图缓存放在用户可写目录（不在 App 内部）：</p>
         <ul>
-          <li><code>~/Library/Application Support/Photo-Aiid-system/photo_aiid.db</code> — 索引与设置（含你填的 Key）</li>
-          <li><code>~/Library/Application Support/Photo-Aiid-system/thumbnails/</code> — 缩略图缓存</li>
+          <li>
+            <b>macOS：</b><code>~/Library/Application Support/Photo-Aiid-system/</code>
+          </li>
+          <li>
+            <b>Windows：</b><code>%APPDATA%\Photo-Aiid-system\</code>
+          </li>
         </ul>
-        <p>删除该文件夹即可清空所有索引与设置；复制该文件夹即可备份。</p>
+        <p>
+          其中 <code>photo_aiid.db</code> 是索引与设置（含你填的 Key、以及历史索引的全部记录），
+          <code>thumbnails/</code> 是缩略图缓存。<b>删除该文件夹</b>即可清空所有索引与设置（历史索引也会一并清空）；
+          <b>复制该文件夹</b>即可备份或迁移到另一台电脑。
+        </p>
 
         <h2>4. 常见问题</h2>
         <ul>
