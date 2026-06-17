@@ -137,6 +137,12 @@
   cursor: grab;
 }
 .tpl-chip:active { cursor: grabbing; }
+.tpl-chip { user-select: none; }
+.tpl-chip.dragging {
+  cursor: grabbing;
+  opacity: .65;
+  background: rgba(232, 163, 61, .18);
+}
 
 .tpl-x {
   background: none;

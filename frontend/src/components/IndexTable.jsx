@@ -19,7 +19,7 @@ export default function IndexTable() {
   const { photos, settings, activeTag, searchQuery } = usePhotoStore()
   const dispatch = usePhotoDispatch()
 
-  // ── 全局索引模式（跨全库搜索，结果瀑布展示）──
+  // ── 历史索引模式（跨全库搜索历史记录，结果瀑布展示）──
   const [globalMode, setGlobalMode] = useState(false)
   const [gq, setGq] = useState('')
   const [results, setResults] = useState([])
@@ -126,20 +126,24 @@ export default function IndexTable() {
   return (
     <section className="index-section">
       <div className="table-actions">
-        <button
-          className={`btn ${globalMode ? 'primary' : 'ghost'}`}
-          onClick={() => setGlobalMode(v => !v)}
-          title="跨所有已索引文件夹按关键词检索"
-        >
-          {globalMode ? '← 返回表格' : '🔍 全局索引'}
-        </button>
-        <button className="btn danger" onClick={handleRename}
-          disabled={!photos.some(p => p.ai)}>
-          ⚡ 执行物理重命名
-        </button>
-        <button className="btn primary" onClick={handleExportCSV}>
-          导出索引 CSV
-        </button>
+        <div className="table-actions-left">
+          <button className="btn danger" onClick={handleRename}
+            disabled={!photos.some(p => p.ai)}>
+            ⚡ 执行物理重命名
+          </button>
+          <button className="btn primary" onClick={handleExportCSV}>
+            导出索引 CSV
+          </button>
+        </div>
+        <div className="table-actions-right">
+          <button
+            className={`btn ${globalMode ? 'primary' : 'ghost'}`}
+            onClick={() => setGlobalMode(v => !v)}
+            title="跨所有已索引文件夹按关键词检索历史记录"
+          >
+            {globalMode ? '← 返回表格' : '🕘 历史索引'}
+          </button>
+        </div>
       </div>
 
       {globalMode ? (

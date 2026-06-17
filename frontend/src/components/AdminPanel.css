@@ -126,6 +126,8 @@
   padding: 11px 12px;
   cursor: grab;
   background: var(--panel);
+  /* 鼠标拖动排序时不选中卡片文字 */
+  user-select: none;
   transition: border-color .15s var(--ease), background .15s var(--ease), opacity .15s var(--ease);
 }
 .book-card:active { cursor: grabbing; }

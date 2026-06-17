@@ -61,7 +61,7 @@ export default function Sidebar() {
   const [ollamaModels, setOllamaModels] = useState(null) // null=未扫描, []=扫描失败/无
   const [ollamaCustom, setOllamaCustom] = useState(false) // 是否手动输入模型名
   const [cancelling, setCancelling] = useState(false)     // 已发出取消请求，等待批次结束
-  const dragIdx = useRef(null)
+  const [dragChip, setDragChip] = useState(null)          // 正在拖拽的字段块索引（用于高亮）
 
   // 扫描 Ollama 本机已安装模型，填充视觉模型下拉
   useEffect(() => {
@@ -84,14 +84,50 @@ export default function Sidebar() {
   const setChips = (arr) => updateSetting('template', arr.join('_'))
   const addChip = (tok) => setChips([...templateChips, tok])
   const removeChip = (i) => setChips(templateChips.filter((_, x) => x !== i))
-  const moveChip = (to) => {
-    const from = dragIdx.current
-    if (from == null || from === to) return
-    const arr = [...templateChips]
-    const [m] = arr.splice(from, 1)
-    arr.splice(to, 0, m)
-    dragIdx.current = null
-    setChips(arr)
+
+  /* ── 字段块拖拽排序（基于鼠标指针，不用 HTML5 draggable）──
+     原因：Tauri 打包后 webview 接管 OS 级拖放，会吞掉页面内 HTML5 拖拽事件，
+     导致 draggable 在桌面 App 里失效。改用 mousedown/mousemove/mouseup 自己实现，
+     浏览器与桌面 App 都能拖。 */
+  const chipDrag = useRef({ active: false, from: null, moved: false, startX: 0, startY: 0 })
+
+  const onChipMouseMove = useCallback((e) => {
+    const st = chipDrag.current
+    if (!st.active) return
+    if (!st.moved &&
+        Math.abs(e.clientX - st.startX) < 5 &&
+        Math.abs(e.clientY - st.startY) < 5) return  // 阈值：区分点击与拖拽
+    st.moved = true
+    e.preventDefault()
+    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const overAttr = el?.closest('.tpl-chip')?.getAttribute('data-idx')
+    if (overAttr == null) return
+    const to = Number(overAttr)
+    if (Number.isNaN(to) || to === st.from) return
+    setChips(((arr) => {
+      const next = [...arr]
+      const [m] = next.splice(st.from, 1)
+      next.splice(to, 0, m)
+      return next
+    })(templateChips))
+    st.from = to
+    setDragChip(to)
+  }, [templateChips, setChips])
+
+  const onChipMouseUp = useCallback(() => {
+    window.removeEventListener('mousemove', onChipMouseMove)
+    window.removeEventListener('mouseup', onChipMouseUp)
+    chipDrag.current = { active: false, from: null, moved: false, startX: 0, startY: 0 }
+    setDragChip(null)
+  }, [onChipMouseMove])
+
+  const onChipMouseDown = (e, i) => {
+    if (e.button !== 0) return                  // 仅左键
+    if (e.target.closest('.tpl-x')) return      // 点在「×」删除按钮上不触发
+    chipDrag.current = { active: true, from: i, moved: false, startX: e.clientX, startY: e.clientY }
+    setDragChip(i)
+    window.addEventListener('mousemove', onChipMouseMove)
+    window.addEventListener('mouseup', onChipMouseUp)
   }
   const addCustomChip = () => {
     const v = customChip.trim()
@@ -703,11 +739,10 @@ export default function Sidebar() {
           {templateChips.map((chip, i) => (
             <span
               key={`${chip}-${i}`}
-              className="tpl-chip"
-              draggable
-              onDragStart={() => { dragIdx.current = i }}
-              onDragOver={e => e.preventDefault()}
-              onDrop={() => moveChip(i)}
+              data-idx={i}
+              className={`tpl-chip${dragChip === i ? ' dragging' : ''}`}
+              onMouseDown={e => onChipMouseDown(e, i)}
+              title="拖动可调整顺序"
             >
               {chip}
               <button className="tpl-x" onClick={() => removeChip(i)}>×</button>

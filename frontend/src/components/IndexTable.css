@@ -13,10 +13,17 @@
   gap: 10px;
   margin-bottom: 14px;
   flex-wrap: nowrap;
-  /* 三个操作按钮同一行、紧贴页面最右端：用负右边距抵消 .index-section 的右内边距，
-     让按钮真正贴到页面右缘（留 4px 极窄气口） */
-  justify-content: flex-end;
+  /* 操作按钮分两头：左侧「执行物理重命名 / 导出索引 CSV」，右侧「历史索引」。
+     用负右边距抵消 .index-section 的右内边距，让右侧按钮贴到页面右缘。 */
+  justify-content: space-between;
+  align-items: center;
   margin-right: -20px;
+}
+
+.table-actions-left,
+.table-actions-right {
+  display: flex;
+  gap: 10px;
 }
 
 .table-actions .btn {
@@ -24,7 +31,7 @@
   padding: 8px 18px;
 }
 
-/* ── 全局索引模式 ── */
+/* ── 历史索引模式 ── */
 .gindex { display: flex; flex-direction: column; gap: 12px; }
 .gindex-search { display: flex; gap: 8px; }
 .gindex-search input {

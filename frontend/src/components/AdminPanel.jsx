@@ -244,16 +244,24 @@ function Console({ fail, onDisconnect }) {
 
   useEffect(() => { loadBooks() }, [loadBooks])
 
-  /* ── 拖拽排序：拖过即实时换位，松手时把当前顺序持久化到本地 ── */
-  function onCardDragStart(e, code) {
-    setDragCode(code)
-    e.dataTransfer.effectAllowed = 'move'
-  }
-  function onCardDragOver(e, overCode) {
+  /* ── 拖拽排序（基于鼠标指针，不用 HTML5 draggable）──
+     原因：Tauri 打包后 webview 接管 OS 级拖放，会吞掉页面内 HTML5 拖拽事件，
+     导致 draggable 在桌面 App 里失效。改用 mousedown/mousemove/mouseup 自己实现，
+     浏览器与桌面 App 都能拖；拖过即实时换位，松手持久化到本地。 */
+  const dragRef = useRef({ active: false, code: null, moved: false, startY: 0 })
+  const suppressClickRef = useRef(false)
+
+  const onDocMouseMove = useCallback((e) => {
+    const st = dragRef.current
+    if (!st.active) return
+    if (!st.moved && Math.abs(e.clientY - st.startY) < 5) return  // 阈值：区分点击与拖拽
+    if (!st.moved) { st.moved = true; setDragCode(st.code) }
     e.preventDefault()
-    if (!dragCode || dragCode === overCode) return
+    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const overCode = el?.closest('.book-card')?.getAttribute('data-code')
+    if (!overCode || overCode === st.code) return
     setBooks(prev => {
-      const from = prev.findIndex(b => b.code === dragCode)
+      const from = prev.findIndex(b => b.code === st.code)
       const to = prev.findIndex(b => b.code === overCode)
       if (from === -1 || to === -1 || from === to) return prev
       const next = [...prev]
@@ -261,10 +269,27 @@ function Console({ fail, onDisconnect }) {
       next.splice(to, 0, moved)
       return next
     })
-  }
-  function onCardDragEnd() {
+  }, [])
+
+  const onDocMouseUp = useCallback(() => {
+    const st = dragRef.current
+    window.removeEventListener('mousemove', onDocMouseMove)
+    window.removeEventListener('mouseup', onDocMouseUp)
+    if (st.moved) {
+      const base = api.getIntakeServer().base || window.location.origin
+      setBooks(prev => { _saveOrder(base, prev.map(b => b.code)); return prev })
+      suppressClickRef.current = true  // 拖拽后抑制随之而来的 click 选中
+    }
+    dragRef.current = { active: false, code: null, moved: false, startY: 0 }
     setDragCode(null)
-    setBooks(prev => { _saveOrder(orderBase, prev.map(b => b.code)); return prev })
+  }, [onDocMouseMove])
+
+  const onCardMouseDown = (e, code) => {
+    if (e.button !== 0) return                  // 仅左键
+    if (e.target.closest('.book-actions')) return  // 点在「重命名/归档」按钮上不触发
+    dragRef.current = { active: true, code, moved: false, startY: e.clientY }
+    window.addEventListener('mousemove', onDocMouseMove)
+    window.addEventListener('mouseup', onDocMouseUp)
   }
   useEffect(() => {
     api.intakeOssConfig().then(d => setOssMode(d.mode)).catch(() => {})
@@ -350,13 +375,13 @@ function Console({ fail, onDisconnect }) {
               : books.map(b => (
                 <div
                   key={b.code}
+                  data-code={b.code}
                   className={`book-card${b.code === selected ? ' active' : ''}${b.status === 'archived' ? ' archived' : ''}${dragCode === b.code ? ' dragging' : ''}`}
-                  draggable
-                  onDragStart={e => onCardDragStart(e, b.code)}
-                  onDragOver={e => onCardDragOver(e, b.code)}
-                  onDragEnd={onCardDragEnd}
-                  onDrop={e => e.preventDefault()}
-                  onClick={() => setSelected(b.code)}
+                  onMouseDown={e => onCardMouseDown(e, b.code)}
+                  onClick={() => {
+                    if (suppressClickRef.current) { suppressClickRef.current = false; return }
+                    setSelected(b.code)
+                  }}
                   title="拖动可调整顺序"
                 >
                   <div className="book-card-top">

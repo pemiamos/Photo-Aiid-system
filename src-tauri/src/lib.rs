@@ -51,10 +51,18 @@ fn backend_executable(app: &tauri::App) -> Option<std::path::PathBuf> {
 fn spawn_backend(app: &tauri::App) -> Option<Child> {
     let exe = backend_executable(app)?;
     log::info!("启动后端: {:?}", exe);
-    Command::new(&exe)
-        .env("PHOTO_AIID_HOST", HOST)
-        .env("PHOTO_AIID_PORT", PORT.to_string())
-        .spawn()
+    let mut cmd = Command::new(&exe);
+    cmd.env("PHOTO_AIID_HOST", HOST)
+        .env("PHOTO_AIID_PORT", PORT.to_string());
+    // Windows：后端是 console=True 的 PyInstaller 产物，直接 spawn 会弹出黑色命令行窗口。
+    // 加 CREATE_NO_WINDOW 标志，让子进程不分配控制台窗口（仍可作为后台进程正常运行）。
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.spawn()
         .map_err(|e| log::error!("后端启动失败: {e}"))
         .ok()
 }
