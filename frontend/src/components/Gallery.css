@@ -157,6 +157,17 @@
   column-gap: 14px;
 }
 
+/* 放大层左右翻页按钮固定到屏幕边缘（不随图片尺寸变动），
+   这样连续翻看时按钮始终在同一位置，鼠标无需追着按钮移动。 */
+.gallery-lightbox .lb-nav {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+}
+.gallery-lightbox .lb-nav.prev { left: 16px; right: auto; }
+.gallery-lightbox .lb-nav.next { right: 16px; left: auto; }
+
 /* 渐进式渲染的加载哨兵：滚动到附近即触发追加下一批卡片 */
 .gallery-sentinel {
   padding: 18px 0 28px;
@@ -208,6 +219,7 @@
   backdrop-filter: blur(4px);
   transition: all .15s var(--ease);
   z-index: 2;
+  cursor: pointer;
 }
 
 .photo-card:hover .card-check {
@@ -274,6 +286,7 @@
 
 .card-img-wrap {
   position: relative;
+  cursor: zoom-in;
 }
 
 .card-img-wrap img {
@@ -323,8 +336,19 @@
 
 .card-fname-name {
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  overflow: hidden;
+}
+/* 中段省略：开头一段可截断，结尾(含扩展名)始终保留 */
+.fname-head {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fname-tail {
+  flex: none;
   white-space: nowrap;
 }
 

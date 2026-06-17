@@ -3,7 +3,19 @@ import { usePhotoStore, usePhotoDispatch, Actions } from '../stores/photoStore'
 import * as api from '../services/api'
 import './Gallery.css'
 
-export function PhotoCard({ photo, index, selected, onToggle, suggestedName }) {
+// 把过长文件名拆成「开头 + 结尾(含扩展名)」两段，配合 CSS 做中段省略，
+// 这样既看得到扩展名、也能区分同前缀的文件，而不是只留开头一截。
+function splitFileName(name) {
+  if (!name) return ['', '']
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 ? name.slice(dot) : ''
+  const stem = dot > 0 ? name.slice(0, dot) : name
+  const TAIL = 5 // 结尾主名保留的字符数
+  if (stem.length <= TAIL + 6) return [stem, ext]
+  return [stem.slice(0, stem.length - TAIL), stem.slice(-TAIL) + ext]
+}
+
+export function PhotoCard({ photo, index, selected, onToggle, onOpen, suggestedName }) {
   const dispatch = usePhotoDispatch()
   const ai = photo.ai || {}
   const [editing, setEditing] = useState(false)
@@ -88,21 +100,27 @@ export function PhotoCard({ photo, index, selected, onToggle, suggestedName }) {
       className={`photo-card${selected ? ' selected' : ''}${editing ? ' editing' : ''}`}
       draggable={!editing}
       onDragStart={handleDragStart}
-      onClick={() => { if (!editing) onToggle(photo.id) }}
-      title={editing ? '' : '点击选中 / 取消，用于「自选分析」；拖到文件夹或桌面可复制原图'}
     >
       <div className="card-edge">
         <span>{frame}</span>
         <span className="card-perf">▸▸▸▸▸▸▸▸</span>
         <span>{fmtDate(exif.date_time_original)}</span>
       </div>
-      <div className="card-img-wrap">
+      <div
+        className="card-img-wrap"
+        onClick={() => { if (!editing) onOpen() }}
+        title={editing ? '' : '点击放大查看；拖到文件夹或桌面可复制原图'}
+      >
         <img
           src={`/api/thumbnails/${photo.id}`}
           alt={photo.file_name}
           loading="lazy"
         />
-        <span className={`card-check${selected ? ' on' : ''}`}>✓</span>
+        <span
+          className={`card-check${selected ? ' on' : ''}`}
+          onClick={(e) => { e.stopPropagation(); onToggle(photo.id) }}
+          title="选中 / 取消（用于「自选分析」与投稿）"
+        >✓</span>
         {statusClass !== 'done' && (
           <span
             className={`card-status ${statusClass}`}
@@ -114,8 +132,14 @@ export function PhotoCard({ photo, index, selected, onToggle, suggestedName }) {
       </div>
       <div className="card-meta">
         <div className="card-fname">
-          <span className="card-fname-name">
-            {photo.file_name}
+          <span className="card-fname-name" title={photo.file_name}>
+            {(() => {
+              const [head, tail] = splitFileName(photo.file_name)
+              return (<>
+                <span className="fname-head">{head}</span>
+                <span className="fname-tail">{tail}</span>
+              </>)
+            })()}
             {ai.category && !editing && (
               <button className="card-edit-btn" onClick={startEdit} title="编辑描述/标签">✏️</button>
             )}
@@ -182,6 +206,9 @@ export default function Gallery() {
   const [batchAddTags, setBatchAddTags] = useState('')
 
   const toggleSelect = (id) => dispatch({ type: Actions.TOGGLE_SELECT, payload: id })
+
+  // 单击缩略图放大查看（与征稿看板一致）：记录在过滤集合中的下标，支持左右切换。
+  const [lightboxIndex, setLightboxIndex] = useState(null)
 
   /* ── 拖文件夹进画廊：直接扫描并切到该文件夹展示（Tauri 桌面端可拿到真实路径）── */
   const [folderDragOver, setFolderDragOver] = useState(false)
@@ -486,6 +513,7 @@ export default function Gallery() {
                 index={i}
                 selected={selectedIds.includes(photo.id)}
                 onToggle={toggleSelect}
+                onOpen={() => setLightboxIndex(i)}
                 suggestedName={previewMap[photo.id]}
               />
             ))}
@@ -497,6 +525,50 @@ export default function Gallery() {
           )}
         </>
       )}
+
+      {lightboxIndex != null && filteredPhotos[lightboxIndex] && (
+        <GalleryLightbox
+          photos={filteredPhotos}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onNav={(d) => setLightboxIndex(i => (i + d + filteredPhotos.length) % filteredPhotos.length)}
+        />
+      )}
     </section>
+  )
+}
+
+/* ── 放大查看（复用征稿看板的 .lightbox 样式，带左右切换 / Esc 关闭 / 元信息）── */
+function GalleryLightbox({ photos, index, onClose, onNav }) {
+  const p = photos[index]
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowLeft') onNav(-1)
+      else if (e.key === 'ArrowRight') onNav(1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose, onNav])
+  if (!p) return null
+
+  const ai = p.ai || {}
+  const dims = p.width && p.height ? `${p.width}×${p.height}` : ''
+  const meta = [`${index + 1}/${photos.length}`, ai.category, ai.location, dims]
+    .filter(Boolean).join(' · ')
+
+  return (
+    <div className="lightbox gallery-lightbox" onClick={onClose}>
+      <div className="lb-stage" onClick={e => e.stopPropagation()}>
+        <button className="lb-nav prev" onClick={() => onNav(-1)} aria-label="上一张">‹</button>
+        <img src={api.originalUrl(p.id)} alt={p.file_name} />
+        <button className="lb-nav next" onClick={() => onNav(1)} aria-label="下一张">›</button>
+        <div className="lb-info">
+          <span className="lb-name">{p.file_name}</span>
+          <span className="lb-meta">{meta}</span>
+        </div>
+        <button className="lb-close" onClick={onClose} aria-label="关闭">✕</button>
+      </div>
+    </div>
   )
 }

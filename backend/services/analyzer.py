@@ -310,7 +310,11 @@ async def analyze_batch(
         if photo_ids is None:
             photos, _ = await db.get_photos(limit=10000, status="queued")
             error_photos, _ = await db.get_photos(limit=10000, status="error")
+            # 残留 'analyzing'：批处理互斥锁保证此刻没有别的批在跑，这些必是上次
+            # 中断（崩溃/重启）遗留的僵尸照片，纳入本批重跑，避免永远卡住不被处理。
+            orphan_photos, _ = await db.get_photos(limit=10000, status="analyzing")
             photos.extend(error_photos)
+            photos.extend(orphan_photos)
             photo_ids = [p["id"] for p in photos]
 
         if not photo_ids:
@@ -348,11 +352,14 @@ async def analyze_batch(
                 except asyncio.QueueEmpty:
                     break
 
-                photo = await db.get_photo(photo_id)
-                if photo:
-                    analysis_progress["current_file"] = photo["file_name"]
-
+                # 注意：db.get_photo 也要在 try 内——并发分析与前端轮询同时读库
+                # 偶发 "database is locked" 等异常，若逸出 try 会直接搞崩该 worker，
+                # 而 gather 又会让其余 worker 失去同步（running 提前变 false，进度条
+                # 消失但后台仍在跑）。统一按「单张失败」处理，worker 继续取下一张。
                 try:
+                    photo = await db.get_photo(photo_id)
+                    if photo:
+                        analysis_progress["current_file"] = photo["file_name"]
                     await analyze_single(photo_id, engine_name=engine_name)
                     analysis_progress["completed"] += 1
                     # Throttle cloud API calls (Gemini free: ~15 RPM)
@@ -364,7 +371,9 @@ async def analyze_batch(
                     analysis_progress["completed"] += 1
 
         workers = [asyncio.create_task(worker()) for _ in range(min(concurrency, len(photo_ids)))]
-        await asyncio.gather(*workers)
+        # return_exceptions=True：任一 worker 万一仍抛异常，也不会让 gather 提前返回、
+        # 把其它 worker 抛在后台脱管；running 会保持到所有 worker 真正跑完才置 false。
+        await asyncio.gather(*workers, return_exceptions=True)
     finally:
         analysis_progress["running"] = False
         analysis_progress["current_file"] = ""

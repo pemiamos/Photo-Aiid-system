@@ -44,6 +44,19 @@ def sanitize_filename(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", str(s)).strip()
 
 
+# 多数文件系统单个文件名上限为 255 字节；UTF-8 下中文每字 3 字节。
+# 给扩展名与去重后缀（如「-2」）留余量，基名按字节截断到此上限。
+_MAX_BASE_BYTES = 200
+
+
+def truncate_bytes(s: str, max_bytes: int = _MAX_BASE_BYTES) -> str:
+    """按 UTF-8 字节数截断，且不切断半个字符。"""
+    b = s.encode("utf-8")
+    if len(b) <= max_bytes:
+        return s
+    return b[:max_bytes].decode("utf-8", "ignore").rstrip()
+
+
 def format_date(date_str: str | None) -> str:
     """Convert EXIF date (YYYY:MM:DD HH:MM:SS) to compact format (YYYYMMDD)."""
     if not date_str:
@@ -86,7 +99,13 @@ def location_from_filename(file_name: str) -> str:
         # 摄影师-地点 结构：取第一个连字符之后的部分
         segs = re.split(r"[-—–]", stem, maxsplit=1)
         cand = segs[1].strip() if len(segs) >= 2 else ""
-    if cand and not re.fullmatch(r"\d{6,8}(-\d+)?", cand):
+    # 仅当候选「看起来是真实地名」才采用：短、且不含描述性标点/空格。
+    # 否则把整段描述误当地点（长描述文件名如「朱超-苏州的古塔和东方之门的
+    # 古今同框，依次记录…」会污染重命名，甚至撑爆文件名长度）。回退到 AI 地点。
+    if (cand
+            and not re.fullmatch(r"\d{6,8}(-\d+)?", cand)
+            and len(cand) <= 12
+            and not re.search(r"[，,。.、；;：:！!？?\s]", cand)):
         return cand
     return ""
 
@@ -212,6 +231,8 @@ async def compute_renames(
             "[序号]": str(seq).zfill(3),
         }
         base = render_template(template, fields)
+        # 兜底：任何字段组合都不得产出超过文件系统限制的文件名。
+        base = truncate_bytes(base)
 
         old_ext = Path(photo["file_name"]).suffix or ".jpg"
         new_name = base + old_ext
