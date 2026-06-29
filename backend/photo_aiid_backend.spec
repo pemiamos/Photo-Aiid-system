@@ -9,7 +9,11 @@ PyInstaller 配置 · Photo-Aiid-system 后端
 """
 
 import os
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_submodules,
+    collect_dynamic_libs,
+)
 
 HERE = os.path.abspath(os.getcwd())  # 约定从 backend/ 目录运行
 
@@ -29,6 +33,16 @@ hiddenimports = []
 hiddenimports += collect_submodules("uvicorn")
 hiddenimports += ["aiosqlite", "exifread"]
 
+# pillow-heif：HEIC/HEIF 解码。含编译扩展 _pillow_heif 与 libheif 动态库，
+# 必须显式收集，否则打包后 PIL 仍打不开 .heic。
+heif_binaries = []
+try:
+    hiddenimports += collect_submodules("pillow_heif")
+    datas += collect_data_files("pillow_heif")
+    heif_binaries += collect_dynamic_libs("pillow_heif")
+except Exception:
+    pass
+
 # ── 排除 ──────────────────────────────────────────────────────────────────
 # clip 引擎是可选的；torch/sentence_transformers 体积巨大且非必需，排除后
 # engines/__init__ 的 try/except 会自动跳过 CLIP，系统仍可用云端引擎。
@@ -46,7 +60,7 @@ excludes = [
 a = Analysis(
     ["run_server.py"],
     pathex=[HERE],
-    binaries=[],
+    binaries=heif_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

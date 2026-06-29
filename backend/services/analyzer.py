@@ -10,6 +10,7 @@ import logging
 import time
 from pathlib import Path
 
+import services.image_compat  # noqa: F401  解除大图限制 + 注册 HEIC，必须在用到 PIL 前导入
 import database as db
 from engines import get_engine
 from engines.base import AnalysisResult
@@ -406,6 +407,11 @@ def _read_and_resize(file_path: str, max_size: int = 512) -> bytes:
     from PIL import Image
 
     with Image.open(file_path) as img:
+        # 大尺寸 JPEG 先按目标尺寸降采样解码，省内存、避免上亿像素图卡死
+        try:
+            img.draft("RGB", (max_size, max_size))
+        except Exception:
+            pass
         if img.mode in ("RGBA", "P", "LA"):
             img = img.convert("RGB")
         elif img.mode != "RGB":

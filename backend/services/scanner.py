@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 
 from PIL import Image, ExifTags
+import services.image_compat  # noqa: F401  解除大图限制 + 注册 HEIC，必须在用到 PIL 前导入
 import database as db
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,11 @@ def generate_thumbnail(image_path: str, output_path: Path, max_size: int = 512) 
     """Generate a JPEG thumbnail. Returns True on success."""
     try:
         with Image.open(image_path) as img:
+            # 大尺寸 JPEG 先按目标尺寸降采样解码，省内存、避免上亿像素图卡死
+            try:
+                img.draft("RGB", (max_size, max_size))
+            except Exception:
+                pass
             # Handle EXIF orientation
             try:
                 exif = img.getexif()
