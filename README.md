@@ -137,7 +137,7 @@ Photo-Aiid-system/
 | **Gemini** | 云端 | 需 API Key，注意区域免费额度。[获取 Key](https://aistudio.google.com/apikey) |
 | **CLIP** | 本地 | 免费、离线、快速分类（仅类别/标签）。需 `pip install sentence-transformers` |
 
-> 所有引擎共用同一识别链路（摄影师/地点/EXIF/相邻序列上下文）。密钥仅保存在本机数据库，不上传第三方。
+> 所有引擎共用同一识别链路（摄影师/地点/EXIF/相邻序列上下文）。API Key仅保存在本机数据库，不上传第三方。
 
 ---
 
