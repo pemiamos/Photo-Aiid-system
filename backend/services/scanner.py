@@ -47,6 +47,10 @@ scan_progress: dict = {
 
 
 def is_image_file(path: Path) -> bool:
+    # 跳过隐藏文件与 macOS 在非 HFS 磁盘生成的 AppleDouble 伴随文件（._xxx），
+    # 它们扩展名虽是 .jpg 等但没有真实图像内容，会卡在「待分析」且无缩略图。
+    if path.name.startswith("."):
+        return False
     return path.suffix.lower() in IMAGE_EXTENSIONS
 
 
@@ -274,6 +278,12 @@ async def scan_directory(
         raise ValueError(f"Directory does not exist: {root_path}")
 
     session_id = await db.create_scan_session(str(root))
+
+    # 清理历史扫描可能已入库的隐藏/AppleDouble 伴随文件（._xxx、.DS_Store 等无内容文件）
+    try:
+        await db.delete_hidden_photos()
+    except Exception as e:
+        logger.warning(f"清理隐藏文件记录失败: {e}")
 
     # Collect all image files first
     all_files: list[Path] = []

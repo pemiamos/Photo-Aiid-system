@@ -685,6 +685,21 @@ async def get_indexed_folders() -> list[dict]:
         await db.close()
 
 
+async def delete_hidden_photos() -> int:
+    """删除文件名以 '.' 开头的记录：macOS 在非 HFS 磁盘生成的 AppleDouble 伴随
+    文件（._xxx）与隐藏文件（.DS_Store 等）无图像内容，不应留在库里。
+    返回删除的记录数（级联清理 exif_data / ai_results）。
+    """
+    db = await get_db()
+    try:
+        cur = await db.execute("DELETE FROM photos WHERE file_name LIKE '.%'")
+        deleted = cur.rowcount
+        await db.commit()
+        return deleted
+    finally:
+        await db.close()
+
+
 async def remove_folder(path: str) -> int:
     """Remove one indexed folder: delete all photos under that path (cascades to
     ai_results / exif_data) plus its scan_sessions. Returns deleted photo count.
