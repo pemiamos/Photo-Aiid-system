@@ -21,6 +21,7 @@ SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS photos (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     file_name     TEXT    NOT NULL,
+    original_name TEXT,                                 -- 首次扫描时的原始文件名，物理重命名后不覆盖
     file_path     TEXT    NOT NULL,
     relative_path TEXT,
     file_size     INTEGER NOT NULL DEFAULT 0,
@@ -117,6 +118,14 @@ async def init_db():
         pcol_names = {c["name"] for c in pcols}
         if "error_message" not in pcol_names:
             await db.execute("ALTER TABLE photos ADD COLUMN error_message TEXT")
+        if "original_name" not in pcol_names:
+            await db.execute("ALTER TABLE photos ADD COLUMN original_name TEXT")
+            # 回填：尚未物理重命名时 file_name 即原始名，保住原文件名里的地名等信息，
+            # 使其在历史索引中即便重命名后仍可被搜到。
+            await db.execute(
+                "UPDATE photos SET original_name = file_name "
+                "WHERE original_name IS NULL OR original_name = ''"
+            )
         # Seed defaults
         defaults = {
             "engine": "ollama",
@@ -205,9 +214,9 @@ async def insert_photo(
     try:
         cursor = await conn.execute(
             """INSERT INTO photos
-               (file_name, file_path, relative_path, file_size, file_mtime,
+               (file_name, original_name, file_path, relative_path, file_size, file_mtime,
                 mime_type, width, height, scan_status, scan_session_id, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
                ON CONFLICT(file_path) DO UPDATE SET
                  file_size = excluded.file_size,
                  file_mtime = excluded.file_mtime,
@@ -215,7 +224,7 @@ async def insert_photo(
                  height = excluded.height,
                  scan_status = 'queued',
                  updated_at = excluded.updated_at""",
-            (file_name, file_path, relative_path, file_size, file_mtime,
+            (file_name, file_name, file_path, relative_path, file_size, file_mtime,
              mime_type, width, height, scan_session_id, now, now),
         )
         await conn.commit()
@@ -327,11 +336,15 @@ async def get_photos(
             where_clauses.append("(a.category = ? OR a.tags LIKE ?)")
             params.extend([tag, f'%"{tag}"%'])
         if search:
+            # 同时搜「当前文件名 / 原始文件名 / 类别 / 标签 / 描述 / 地点 / 摄影师」，
+            # 原始文件名里的地名（如「九龙潭」）即便物理重命名后也仍可被历史索引搜到。
             where_clauses.append(
-                "(p.file_name LIKE ? OR a.category LIKE ? OR a.tags LIKE ? OR a.description LIKE ?)"
+                "(p.file_name LIKE ? OR p.original_name LIKE ? OR a.category LIKE ? "
+                "OR a.tags LIKE ? OR a.description LIKE ? OR a.location LIKE ? "
+                "OR a.photographer LIKE ?)"
             )
             s = f"%{search}%"
-            params.extend([s, s, s, s])
+            params.extend([s, s, s, s, s, s, s])
         if scan_session_id is not None:
             where_clauses.append("p.scan_session_id = ?")
             params.append(scan_session_id)
