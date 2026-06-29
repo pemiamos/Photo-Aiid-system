@@ -1,4 +1,5 @@
 import { usePhotoStore, usePhotoDispatch, Actions } from '../stores/photoStore'
+import pkg from '../../package.json'
 import './Header.css'
 
 const TABS = [
@@ -23,7 +24,7 @@ export default function Header() {
     <header className="header">
       <div className="header-logo">
         <b>Photo-Aiid-system</b>
-        <span className="version-badge">v3.1</span>
+        <span className="version-badge">v{pkg.version}</span>
       </div>
 
       <nav className="header-nav">
