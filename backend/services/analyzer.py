@@ -149,6 +149,10 @@ async def analyze_single(photo_id: int, engine_name: str | None = None) -> Analy
     elif engine_name == "zhipu":
         engine_kwargs["api_key"] = settings.get("zhipu_api_key", "")
         engine_kwargs["model"] = settings.get("zhipu_model", "glm-4v-flash")
+    elif engine_name == "openai":
+        engine_kwargs["api_key"] = settings.get("openai_api_key", "")
+        engine_kwargs["model"] = settings.get("openai_model", "gpt-4o-mini")
+        engine_kwargs["base_url"] = settings.get("openai_base_url", "")
 
     engine = get_engine(engine_name, **engine_kwargs)
 

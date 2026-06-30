@@ -284,6 +284,37 @@
   color: var(--faint);
 }
 
+/* 顶栏中段显示图片所在目录（原「点点点」位置），过长中间省略 */
+.card-path {
+  flex: 1;
+  min-width: 0;
+  margin: 0 8px;
+  color: var(--faint);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;            /* 路径太长时优先保留尾部（更具体的文件夹名） */
+}
+
+/* 顶栏右侧「打开所在文件夹」按钮（替代原拍摄日期） */
+.card-reveal {
+  flex: none;
+  background: none;
+  border: none;
+  padding: 1px 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .04em;
+  color: var(--amber);
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.card-reveal:hover {
+  background: rgba(255, 176, 32, .14);
+}
+
 .card-img-wrap {
   position: relative;
   cursor: zoom-in;
@@ -411,6 +442,14 @@
   flex: none;
   font-family: var(--mono);
   color: var(--faint);
+}
+
+/* 文件名正下方的尺寸 + 大小（始终显示，独立于分析状态） */
+.card-specs-line {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  margin: 2px 0 6px;
 }
 
 /* ── inline / batch editor ── */

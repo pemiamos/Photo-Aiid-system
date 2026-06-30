@@ -1,5 +1,15 @@
 import { createContext, useContext, useReducer, useCallback } from 'react'
 
+/* 用户模式：普通用户版（默认，隐藏投稿/征稿）⇄ 高级摄影师版（完整功能）。
+   存 localStorage，重启恢复上次状态。 */
+const PRO_MODE_KEY = 'ui_pro_mode'
+function loadProMode() {
+  try { return localStorage.getItem(PRO_MODE_KEY) === '1' } catch { return false }
+}
+function saveProMode(on) {
+  try { localStorage.setItem(PRO_MODE_KEY, on ? '1' : '0') } catch { /* 忽略 */ }
+}
+
 /* ── initial state ── */
 const initialState = {
   photos: [],
@@ -10,6 +20,9 @@ const initialState = {
     geminiApiKey: '',
     geminiModel: 'gemini-2.5-flash',
     zhipuApiKey: '',
+    openaiApiKey: '',
+    openaiModel: 'gpt-4o-mini',
+    openaiBaseUrl: 'https://api.openai.com/v1',
     ollamaUrl: 'http://localhost:11434',
     ollamaModel: 'gemma4:31b',
     prefix: 'SDEXP',
@@ -20,6 +33,7 @@ const initialState = {
   scanStatus: 'idle',         // idle | scanning | done
   analysisProgress: null,     // { current, total } | null
   activeTab: 'gallery',       // gallery | index | submit | about | admin
+  proMode: loadProMode(),     // 高级摄影师版（露出投稿/征稿）；false=普通用户版
   submitMode: false,          // 投稿模式：锁定编辑、画廊选片投稿
   activeTag: null,
   selectedIds: [],            // user-selected photo ids for 自选分析
@@ -47,6 +61,7 @@ export const Actions = {
   SET_SCAN_STATUS: 'SET_SCAN_STATUS',
   SET_ANALYSIS_PROGRESS: 'SET_ANALYSIS_PROGRESS',
   SET_ACTIVE_TAB: 'SET_ACTIVE_TAB',
+  SET_PRO_MODE: 'SET_PRO_MODE',
   SET_SUBMIT_MODE: 'SET_SUBMIT_MODE',
   SET_ACTIVE_TAG: 'SET_ACTIVE_TAG',
   TOGGLE_SELECT: 'TOGGLE_SELECT',
@@ -100,6 +115,19 @@ function photoReducer(state, action) {
 
     case Actions.SET_ACTIVE_TAB:
       return { ...state, activeTab: action.payload }
+
+    case Actions.SET_PRO_MODE: {
+      const on = !!action.payload
+      saveProMode(on)
+      // 切回普通版时：退出投稿模式；若正停在投稿/投稿管理页则回画廊，避免停在已隐藏的页面
+      const leaving = !on && (state.activeTab === 'admin' || state.activeTab === 'submit')
+      return {
+        ...state,
+        proMode: on,
+        submitMode: on ? state.submitMode : false,
+        activeTab: leaving ? 'gallery' : state.activeTab,
+      }
+    }
 
     case Actions.SET_SUBMIT_MODE:
       // 退出投稿模式时，若停留在投稿页则回到画廊

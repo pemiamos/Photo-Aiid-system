@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePhotoStore, usePhotoDispatch, Actions } from '../stores/photoStore'
-import { PhotoCard } from './Gallery'
+import { PhotoCard, GalleryLightbox } from './Gallery'
 import * as api from '../services/api'
 import './IndexTable.css'
 
@@ -28,6 +28,7 @@ export default function IndexTable() {
   const [searched, setSearched] = useState(false)
   const [topTags, setTopTags] = useState([])
   const [recent, setRecent] = useState(loadRecent)
+  const [lightboxIndex, setLightboxIndex] = useState(null)   // 历史索引结果放大查看
 
   // 进入全局模式时拉「高频关键词」（全库标签词频 TopN）
   useEffect(() => {
@@ -196,10 +197,20 @@ export default function IndexTable() {
                   index={i}
                   selected={false}
                   onToggle={() => {}}
+                  onOpen={() => setLightboxIndex(i)}
                   suggestedName={p.suggested_name}
                 />
               ))}
             </div>
+          )}
+
+          {lightboxIndex != null && results[lightboxIndex] && (
+            <GalleryLightbox
+              photos={results}
+              index={lightboxIndex}
+              onClose={() => setLightboxIndex(null)}
+              onNav={(d) => setLightboxIndex(i => (i + d + results.length) % results.length)}
+            />
           )}
 
           {results.length < total && (

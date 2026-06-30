@@ -15,6 +15,13 @@ function splitFileName(name) {
   return [stem.slice(0, stem.length - TAIL), stem.slice(-TAIL) + ext]
 }
 
+// 取文件所在目录（去掉文件名那一截），兼容 / 与 \ 两种分隔符。
+function dirOf(p) {
+  if (!p) return ''
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i > 0 ? p.slice(0, i) : p
+}
+
 export function PhotoCard({ photo, index, selected, onToggle, onOpen, suggestedName }) {
   const dispatch = usePhotoDispatch()
   const ai = photo.ai || {}
@@ -103,8 +110,22 @@ export function PhotoCard({ photo, index, selected, onToggle, onOpen, suggestedN
     >
       <div className="card-edge">
         <span>{frame}</span>
-        <span className="card-perf">▸▸▸▸▸▸▸▸</span>
-        <span>{fmtDate(exif.date_time_original)}</span>
+        {photo.file_path
+          ? <span className="card-path" title={photo.file_path}>{dirOf(photo.file_path)}</span>
+          : <span className="card-perf">▸▸▸▸▸▸▸▸</span>}
+        {photo.file_path
+          ? <button
+              className="card-reveal"
+              title={`在文件管理器中打开所在文件夹\n${photo.file_path}`}
+              onClick={async (e) => {
+                e.stopPropagation()
+                try {
+                  const r = await api.revealPhoto(photo.id)
+                  if (r && r.ok === false) dispatch({ type: Actions.SET_ERROR, payload: r.message || '无法打开文件夹' })
+                } catch (err) { dispatch({ type: Actions.SET_ERROR, payload: err.message }) }
+              }}
+            >📂 打开文件夹</button>
+          : <span>{fmtDate(exif.date_time_original)}</span>}
       </div>
       <div
         className="card-img-wrap"
@@ -148,13 +169,16 @@ export function PhotoCard({ photo, index, selected, onToggle, onOpen, suggestedN
             <span className="card-category">{ai.category}</span>
           )}
         </div>
+        {/* 尺寸 + 大小：文件名正下方一律显示，不受分析成功/失败影响 */}
+        {specs && !editing && (
+          <div className="card-specs-line">{specs}</div>
+        )}
         {ai.category && !editing && (
           <>
             <div className="card-newname">→ {suggestedName || '（拟重命名生成中…）'}</div>
-            {(ai.location || specs) && (
+            {ai.location && (
               <div className="card-location">
-                <span className="card-loc-text">{ai.location ? `📍 ${ai.location}` : ''}</span>
-                {specs && <span className="card-specs">{specs}</span>}
+                <span className="card-loc-text">📍 {ai.location}</span>
               </div>
             )}
             <div className="card-tags">
@@ -539,7 +563,7 @@ export default function Gallery() {
 }
 
 /* ── 放大查看（复用征稿看板的 .lightbox 样式，带左右切换 / Esc 关闭 / 元信息）── */
-function GalleryLightbox({ photos, index, onClose, onNav }) {
+export function GalleryLightbox({ photos, index, onClose, onNav }) {
   const p = photos[index]
   useEffect(() => {
     const onKey = (e) => {

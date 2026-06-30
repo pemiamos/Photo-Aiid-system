@@ -121,6 +121,16 @@ export function originalUrl(id) {
   return `${window.location.origin}${BASE}/originals/${id}`
 }
 
+// 在系统文件管理器中定位该照片（Finder/资源管理器选中文件）。仅桌面端有意义。
+export async function revealPhoto(id) {
+  return request(`/photos/${id}/reveal`, { method: 'POST' })
+}
+
+// 拉取当前 OpenAI（或兼容网关）实际支持的模型列表，填充识别引擎下拉。
+export async function openaiModels() {
+  return request('/openai/models')
+}
+
 /* ── Analysis ── */
 export async function analyzePhotos(options = {}) {
   return request('/analyze', {

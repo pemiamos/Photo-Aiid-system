@@ -190,12 +190,18 @@
   font-size: 11px;
   color: var(--faint);
 }
+.admin-footer { --sdexp-green: #4a9e6a; }
 .admin-footer a {
   color: var(--faint);
   text-decoration: none;
   transition: color .15s var(--ease);
 }
-.admin-footer a:hover { color: var(--amber); }
+/* CC 协议链接悬停琥珀；星尘远征队（图标 + 文字）悬停用品牌绿、两者联动 */
+.admin-footer > .footer-text > a[href*="creativecommons"]:hover { color: var(--amber); }
+.admin-footer .footer-credit:hover { color: var(--sdexp-green); }
+.admin-footer .footer-logo-link:hover .footer-logo { filter: none; }
+.admin-footer:has(.footer-credit:hover) .footer-logo { filter: none; }
+.admin-footer:has(.footer-logo-link:hover) .footer-credit { color: var(--sdexp-green); }
 
 /* 右：详情 */
 .book-detail { min-width: 0; }
@@ -431,7 +437,16 @@
   aspect-ratio: 1 / 1;
 }
 .thumb:hover { border-color: var(--amber-dim); }
-.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.thumb-broken {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 2px; text-align: center; line-height: 1.25;
+  font-size: 11px; color: var(--muted);
+  background: var(--panel); cursor: pointer;
+}
+.thumb-broken:hover { color: var(--amber); }
 .thumb-label {
   position: absolute; left: 0; right: 0; bottom: 0;
   font-size: 11px; color: #fff;

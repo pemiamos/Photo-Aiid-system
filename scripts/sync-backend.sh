@@ -37,6 +37,9 @@ EXCLUDES=(
   --exclude "*.db" --exclude "*.db-wal" --exclude "*.db-shm"
   --exclude ".venv" --exclude "__pycache__"
   --exclude "archive_state.json"      # 服务器本地的归档状态，勿覆盖
+  --exclude "intake_data"             # 服务器运行时数据（上传/缩略图缓存），勿覆盖或删除
+  --exclude "dist" --exclude "build"  # 本地 PyInstaller 打包产物；服务器用 .venv 跑，不需要
+  --exclude "*.spec"                  # 同上，打包配置与云端无关
   --exclude "*.log"
   --exclude ".DS_Store"
 )
@@ -51,7 +54,7 @@ fi
 echo "==> $ACTION"
 echo "    本地: $LOCAL_BACKEND/"
 echo "    远端: $REMOTE:$APP_DIR/backend/"
-echo "    排除: .env / *.db / .venv / __pycache__ / archive_state.json / *.log"
+echo "    排除: .env / *.db / .venv / __pycache__ / archive_state.json / intake_data / dist / build / *.log"
 echo
 
 # 注意结尾的斜杠：把 backend/ 的内容同步进远端 backend/ 内。--delete-after 让远端与本地

@@ -44,6 +44,18 @@
   color: var(--ok);
 }
 
+/* 内联文字按钮（如「↻ 刷新」拉取模型） */
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--amber);
+  cursor: pointer;
+}
+.link-btn:hover { text-decoration: underline; }
+
 .folder-input-row {
   display: flex;
   gap: 6px;
@@ -269,12 +281,21 @@
   font-size: 11px;
   color: var(--faint);
 }
+/* 星尘远征队品牌绿（取自 logo 实色 #2e7050，深底提亮以便辨识） */
+.sidebar-footer { --sdexp-green: #4a9e6a; }
+
+.footer-logo-link {
+  display: inline-flex;
+  flex-shrink: 0;
+  line-height: 0;
+}
 .footer-logo {
   width: 38px;
   height: 38px;
   flex-shrink: 0;
-  /* 去色 + 提亮成浅灰，与两行文字同色调 */
+  /* 默认去色 + 提亮成浅灰，与两行文字同色调；悬停恢复原绿 */
   filter: grayscale(1) brightness(1.5) contrast(1.1);
+  transition: filter .15s var(--ease);
 }
 .footer-text {
   display: flex;
@@ -293,9 +314,20 @@
   text-decoration: none;
   transition: color .15s var(--ease);
 }
-.sidebar-footer a:hover {
+/* CC 协议链接：悬停琥珀（保持原样） */
+.sidebar-footer > .footer-text > a[href*="creativecommons"]:hover {
   color: var(--amber);
 }
+/* 星尘远征队：图标与文字悬停都用品牌绿；悬停任一处两者联动高亮 */
+.footer-credit:hover {
+  color: var(--sdexp-green);
+}
+.footer-logo-link:hover .footer-logo {
+  filter: none;   /* 恢复 logo 原色（绿鹿） */
+}
+/* 悬停图标或文字，两者联动：图标恢复原色、文字转品牌绿 */
+.sidebar-footer:has(.footer-credit:hover) .footer-logo { filter: none; }
+.sidebar-footer:has(.footer-logo-link:hover) .footer-credit { color: var(--sdexp-green); }
 
 /* 投稿模式：编辑区锁定变灰 */
 .sidebar-edit.locked {

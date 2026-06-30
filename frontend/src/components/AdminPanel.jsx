@@ -199,6 +199,14 @@ function _loadOrder(base) {
 function _saveOrder(base, codes) {
   try { localStorage.setItem(_orderKey(base), JSON.stringify(codes)) } catch { /* 忽略 */ }
 }
+/* 记住上次选中的书目（按服务器地址分桶），下次打开投稿管理自动回到同一本。 */
+function _selKey(base) { return 'intake_book_selected:' + (base || '') }
+function _loadSel(base) {
+  try { return localStorage.getItem(_selKey(base)) || '' } catch { return '' }
+}
+function _saveSel(base, code) {
+  try { localStorage.setItem(_selKey(base), code || '') } catch { /* 忽略 */ }
+}
 function _applyOrder(rows, order) {
   if (!order || !order.length) return rows
   const idx = c => { const i = order.indexOf(c); return i === -1 ? Infinity : i }
@@ -233,7 +241,8 @@ function Console({ fail, onDisconnect }) {
       const data = await api.intakeBooks()
       setBooks(_applyOrder(data.rows, _loadOrder(orderBase)))
       setSelected(prev => {
-        const want = keep || prev
+        // 优先级：显式 keep > 当前选中 > 上次记住的 > 列表第一本
+        const want = keep || prev || _loadSel(orderBase)
         if (want && data.rows.some(b => b.code === want)) return want
         return data.rows[0]?.code || ''
       })
@@ -243,6 +252,9 @@ function Console({ fail, onDisconnect }) {
   }, [fail, orderBase])
 
   useEffect(() => { loadBooks() }, [loadBooks])
+
+  // 选中书目变化即持久化，下次打开恢复到同一本
+  useEffect(() => { if (selected) _saveSel(orderBase, selected) }, [selected, orderBase])
 
   /* ── 拖拽排序（基于鼠标指针，不用 HTML5 draggable）──
      原因：Tauri 打包后 webview 接管 OS 级拖放，会吞掉页面内 HTML5 拖拽事件，
@@ -441,7 +453,15 @@ function Console({ fail, onDisconnect }) {
       </div>
 
       <footer className="admin-footer">
-        <img className="footer-logo" src="/logo.png" alt="星尘远征队" />
+        <a
+          className="footer-logo-link"
+          href="https://www.sdexp.org/"
+          target="_blank"
+          rel="noreferrer"
+          title="星尘远征队 · https://www.sdexp.org/"
+        >
+          <img className="footer-logo" src="/logo.png" alt="星尘远征队" />
+        </a>
         <div className="footer-text">
           <a
             href="https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh"
@@ -450,7 +470,15 @@ function Console({ fail, onDisconnect }) {
           >
             CC BY-NC-SA 4.0
           </a>
-          <span className="footer-credit">星尘远征队 出品</span>
+          <a
+            className="footer-credit"
+            href="https://www.sdexp.org/"
+            target="_blank"
+            rel="noreferrer"
+            title="星尘远征队 · https://www.sdexp.org/"
+          >
+            星尘远征队 出品
+          </a>
         </div>
       </footer>
 
@@ -716,6 +744,44 @@ function FragmentRow({ children }) {
   return <>{children}</>
 }
 
+/* ── 缩略图：OSS 现出的小图偶发处理失败/限流（HEIC 等源格式更会直接报错）。
+   失败时先回退原图，原图再失败才显示占位，避免黑块「刷不出来」。点占位可重试。 */
+function ThumbImg({ thumb, full, alt }) {
+  const thumbSrc = api.intakeImageSrc(thumb || full)
+  const fullSrc = api.intakeImageSrc(full || thumb)
+  // stage: 'thumb' → 加载小图；'full' → 已回退原图；'error' → 都失败
+  const [stage, setStage] = useState('thumb')
+  const [nonce, setNonce] = useState(0)   // 重试时强制刷新 src
+
+  useEffect(() => { setStage('thumb'); setNonce(0) }, [thumbSrc, fullSrc])
+
+  if (stage === 'error') {
+    return (
+      <span
+        className="thumb-broken"
+        role="button"
+        title="加载失败，点击重试"
+        onClick={(e) => { e.stopPropagation(); setStage('thumb'); setNonce(n => n + 1) }}
+      >加载失败<br />点重试</span>
+    )
+  }
+
+  const src = stage === 'thumb' ? thumbSrc : fullSrc
+  const bust = nonce ? (src.includes('?') ? `&_r=${nonce}` : `?_r=${nonce}`) : ''
+  return (
+    <img
+      src={src + bust}
+      alt={alt}
+      loading="lazy"
+      onError={() => {
+        // 小图失败且原图地址不同 → 回退原图；否则标记彻底失败
+        if (stage === 'thumb' && fullSrc && fullSrc !== thumbSrc) setStage('full')
+        else setStage('error')
+      }}
+    />
+  )
+}
+
 /* ── 下钻：某摄影师的照片缩略图墙（懒加载 + 点击放大 + 多选存入文件夹）── */
 function FileGrid({ code, name, book, fail, notify, collections = [], onCollectionsChanged }) {
   const [state, setState] = useState({ loading: true, files: null })
@@ -786,7 +852,7 @@ function FileGrid({ code, name, book, fail, notify, collections = [], onCollecti
               onClick={() => selecting ? toggle(f.id) : setLightbox(i)}
               title={`${f.file_name}${f.label ? ' · ' + f.label : ''}`}
             >
-              <img src={api.intakeImageSrc(f.thumb || f.url)} alt={f.file_name} loading="lazy" />
+              <ThumbImg thumb={f.thumb} full={f.url} alt={f.file_name} />
               {f.label && f.label !== '未命名' && <span className="thumb-label">{f.label}</span>}
               {selecting && <span className="thumb-check">{isSel ? '✓' : ''}</span>}
             </button>
@@ -1008,7 +1074,7 @@ function FolderView({ cid, name, fail, notify, onChanged }) {
                   onDoubleClick={() => setLightbox(i)}
                   title={`${f.file_name}　（单击选择 · 双击放大）`}
                 >
-                  <img src={api.intakeImageSrc(f.thumb || f.url)} alt={f.file_name} loading="lazy" />
+                  <ThumbImg thumb={f.thumb} full={f.url} alt={f.file_name} />
                   {f.label && f.label !== '未命名' && <span className="thumb-label">{f.label}</span>}
                   <span className="thumb-check">{isSel ? '✓' : ''}</span>
                 </button>

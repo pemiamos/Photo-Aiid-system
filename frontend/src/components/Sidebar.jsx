@@ -37,8 +37,18 @@ const ENGINES = [
   { value: 'zhipu',  label: '智谱 GLM' },
   { value: 'claude', label: 'Claude API' },
   { value: 'gemini', label: 'Gemini API' },
+  { value: 'openai', label: 'OpenAI API' },
   { value: 'ollama', label: 'Ollama 本地' },
   { value: 'clip',   label: 'CLIP 本地' },
+]
+
+// OpenAI 视觉模型预设（均支持 chat/completions + 图片输入）。
+// 价格/能力从低到高：4o-mini ≈ 4.1-mini < 4.1 < 4o；按需挑，也可「自定义…」填任意模型名。
+const OPENAI_MODELS = [
+  'gpt-4o-mini',
+  'gpt-4.1-mini',
+  'gpt-4.1',
+  'gpt-4o',
 ]
 
 // Ollama 本地视觉模型预设选项
@@ -53,13 +63,15 @@ const OLLAMA_MODELS = [
 export default function Sidebar() {
   const state = usePhotoStore()
   const dispatch = usePhotoDispatch()
-  const { photos, tags, settings, engineStatus, stats, activeTag, selectedIds, submitMode } = state
+  const { photos, tags, settings, engineStatus, stats, activeTag, selectedIds, submitMode, proMode } = state
 
   const [testResult, setTestResult] = useState(null)
   const [scanning, setScanning] = useState(false)
   const [customChip, setCustomChip] = useState('')
   const [ollamaModels, setOllamaModels] = useState(null) // null=未扫描, []=扫描失败/无
   const [ollamaCustom, setOllamaCustom] = useState(false) // 是否手动输入模型名
+  const [openaiCustom, setOpenaiCustom] = useState(false) // OpenAI 模型是否手动输入
+  const [openaiModels, setOpenaiModels] = useState(null)  // null=拉取中, []=失败/未配置
   const [cancelling, setCancelling] = useState(false)     // 已发出取消请求，等待批次结束
   const [dragChip, setDragChip] = useState(null)          // 正在拖拽的字段块索引（用于高亮）
 
@@ -78,6 +90,22 @@ export default function Sidebar() {
       .catch(() => { if (!cancelled) setOllamaModels([]) })
     return () => { cancelled = true }
   }, [settings.engine, settings.ollamaUrl])
+
+  // 拉取 OpenAI（或兼容网关）实际支持的模型，填充下拉。读取后端已保存的 key/base，
+  // 所以手动刷新前最好等设置自动同步（~1s）落库；提供「↻」按钮可随时重拉。
+  const fetchOpenaiModels = useCallback(async () => {
+    setOpenaiModels(null)
+    try {
+      const d = await api.openaiModels()
+      setOpenaiModels(d?.ok ? (d.models || []) : [])
+    } catch {
+      setOpenaiModels([])
+    }
+  }, [])
+  useEffect(() => {
+    if (settings.engine !== 'openai') return
+    fetchOpenaiModels()
+  }, [settings.engine, fetchOpenaiModels])
 
   // Rename template as an ordered list of "_"-joined chips.
   const templateChips = (settings.template || '').split('_').filter(Boolean)
@@ -253,6 +281,10 @@ export default function Sidebar() {
           claude_api_key: settings.apiKey,
           gemini_api_key: settings.geminiApiKey,
           gemini_model: settings.geminiModel,
+          zhipu_api_key: settings.zhipuApiKey,
+          openai_api_key: settings.openaiApiKey,
+          openai_model: settings.openaiModel,
+          openai_base_url: settings.openaiBaseUrl,
           ollama_url: settings.ollamaUrl,
           ollama_model: settings.ollamaModel,
           rename_prefix: settings.prefix,
@@ -419,6 +451,9 @@ export default function Sidebar() {
         gemini_api_key: settings.geminiApiKey,
         gemini_model: settings.geminiModel,
         zhipu_api_key: settings.zhipuApiKey,
+        openai_api_key: settings.openaiApiKey,
+        openai_model: settings.openaiModel,
+        openai_base_url: settings.openaiBaseUrl,
         ollama_url: settings.ollamaUrl,
         ollama_model: settings.ollamaModel,
         rename_prefix: settings.prefix,
@@ -664,6 +699,82 @@ export default function Sidebar() {
           </div>
         )}
 
+        {settings.engine === 'openai' && (
+          <div className="engine-config">
+            <label className="sidebar-field">API Key</label>
+            <input
+              type="password"
+              placeholder="sk-…"
+              value={settings.openaiApiKey || ''}
+              onChange={e => updateSetting('openaiApiKey', e.target.value)}
+            />
+            <label className="sidebar-field">API 地址（可选）</label>
+            <input
+              type="text"
+              placeholder="https://api.openai.com/v1"
+              value={settings.openaiBaseUrl || ''}
+              onChange={e => updateSetting('openaiBaseUrl', e.target.value)}
+            />
+            <label className="sidebar-field">
+              模型
+              {openaiModels === null
+                ? <span className="sidebar-hint" style={{marginLeft:8}}>拉取中…</span>
+                : openaiModels.length
+                  ? <span className="sidebar-hint" style={{marginLeft:8}}>接口可用 {openaiModels.length} 个</span>
+                  : <span className="sidebar-hint" style={{marginLeft:8}}>未拉到（填好 Key/地址后点 ↻）</span>}
+              <button
+                type="button"
+                className="link-btn"
+                style={{marginLeft:8}}
+                title="重新从接口拉取可用模型"
+                onClick={fetchOpenaiModels}
+              >↻ 刷新</button>
+            </label>
+            {(() => {
+              // 优先用接口实拉的列表；拉不到时退回少量常见预设，仍可「自定义…」手填
+              const available = (openaiModels && openaiModels.length) ? openaiModels : OPENAI_MODELS
+              const isCustom = openaiCustom || !available.includes(settings.openaiModel)
+              return (
+                <>
+                  <select
+                    value={isCustom ? '__custom__' : settings.openaiModel}
+                    onChange={e => {
+                      if (e.target.value === '__custom__') {
+                        setOpenaiCustom(true)
+                      } else {
+                        setOpenaiCustom(false)
+                        updateSetting('openaiModel', e.target.value)
+                      }
+                    }}
+                  >
+                    {available.map(m => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                    <option value="__custom__">自定义…</option>
+                  </select>
+                  {isCustom && (
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder="输入模型名"
+                      value={settings.openaiModel || ''}
+                      onChange={e => updateSetting('openaiModel', e.target.value)}
+                    />
+                  )}
+                </>
+              )
+            })()}
+            <div className="sidebar-hint">
+              下拉里是「你的接口实际支持的模型」（自建/代理网关各不相同）。改完 Key 或地址后点「↻ 刷新」重拉；选「自定义…」可手填任意模型名。
+              <br />
+              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" style={{color:'var(--amber)'}}>
+                platform.openai.com/api-keys
+              </a>
+              {' '}获取官方 Key
+            </div>
+          </div>
+        )}
+
         {settings.engine === 'ollama' && (
           <div className="engine-config">
             <label className="sidebar-field">Endpoint</label>
@@ -868,19 +979,29 @@ export default function Sidebar() {
       </div>
       </div>{/* /.sidebar-edit */}
 
-      {/* ── 投稿接口（模式开关，下沉紧贴底部横线） ── */}
-      <div className="sidebar-section submit-toggle">
-        <button
-          className={`btn ${submitMode ? 'primary' : 'ghost'}`}
-          onClick={() => dispatch({ type: Actions.SET_SUBMIT_MODE, payload: !submitMode })}
-          title="进入/退出投稿模式：在画廊里勾选要投稿的照片后确认提交"
-        >
-          {submitMode ? '退出投稿模式' : '投稿接口'}
-        </button>
-      </div>
+      {/* ── 投稿接口（模式开关，下沉紧贴底部横线）：仅高级摄影师版露出 ── */}
+      {proMode && (
+        <div className="sidebar-section submit-toggle">
+          <button
+            className={`btn ${submitMode ? 'primary' : 'ghost'}`}
+            onClick={() => dispatch({ type: Actions.SET_SUBMIT_MODE, payload: !submitMode })}
+            title="进入/退出投稿模式：在画廊里勾选要投稿的照片后确认提交"
+          >
+            {submitMode ? '退出投稿模式' : '投稿接口'}
+          </button>
+        </div>
+      )}
 
       <footer className="sidebar-footer">
-        <img className="footer-logo" src="/logo.png" alt="星尘远征队" />
+        <a
+          className="footer-logo-link"
+          href="https://www.sdexp.org/"
+          target="_blank"
+          rel="noreferrer"
+          title="星尘远征队 · https://www.sdexp.org/"
+        >
+          <img className="footer-logo" src="/logo.png" alt="星尘远征队" />
+        </a>
         <div className="footer-text">
           <a
             href="https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh"
@@ -889,7 +1010,15 @@ export default function Sidebar() {
           >
             CC BY-NC-SA 4.0
           </a>
-          <span className="footer-credit">星尘远征队 出品</span>
+          <a
+            className="footer-credit"
+            href="https://www.sdexp.org/"
+            target="_blank"
+            rel="noreferrer"
+            title="星尘远征队 · https://www.sdexp.org/"
+          >
+            星尘远征队 出品
+          </a>
         </div>
       </footer>
     </aside>

@@ -6,7 +6,8 @@ const TABS = [
   { key: 'gallery', label: '画廊' },
   { key: 'index',   label: '索引表' },
   { key: 'about',   label: '使用教程' },
-  { key: 'admin',   label: '投稿管理' },
+  // 仅高级摄影师版可见
+  { key: 'admin',   label: '投稿管理', pro: true },
 ]
 
 const STATUS_TEXT = {
@@ -17,8 +18,10 @@ const STATUS_TEXT = {
 }
 
 export default function Header() {
-  const { activeTab, engineStatus, settings } = usePhotoStore()
+  const { activeTab, engineStatus, settings, proMode } = usePhotoStore()
   const dispatch = usePhotoDispatch()
+
+  const visibleTabs = TABS.filter(t => !t.pro || proMode)
 
   return (
     <header className="header">
@@ -28,7 +31,7 @@ export default function Header() {
       </div>
 
       <nav className="header-nav">
-        {TABS.map(t => (
+        {visibleTabs.map(t => (
           <button
             key={t.key}
             className={activeTab === t.key ? 'active' : ''}
@@ -40,6 +43,15 @@ export default function Header() {
       </nav>
 
       <div className="header-right">
+        <button
+          className="mode-toggle"
+          onClick={() => dispatch({ type: Actions.SET_PRO_MODE, payload: !proMode })}
+          title={proMode
+            ? '当前为高级摄影师版（含投稿管理 / 云端征稿）。点击切回普通用户版'
+            : '当前为普通用户版。点击解锁投稿管理 / 投稿模式 / 云端征稿'}
+        >
+          {proMode ? '切换到普通用户版' : '切换到高级摄影师版'}
+        </button>
         {settings.folderPath && (
           <span className="header-folder">
             <span className="folder-icon">📁</span>

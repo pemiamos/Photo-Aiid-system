@@ -77,6 +77,24 @@
   gap: 4px;
 }
 
+/* 普通用户版 ⇄ 高级摄影师版 切换按钮 */
+.mode-toggle {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  transition: all .2s var(--ease);
+}
+.mode-toggle:hover {
+  color: var(--amber);
+  border-color: var(--amber-dim);
+}
+
 .engine-indicator {
   display: flex;
   align-items: center;

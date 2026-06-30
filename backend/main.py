@@ -136,6 +136,9 @@ class SettingsUpdate(BaseModel):
     gemini_model: str | None = None
     zhipu_api_key: str | None = None
     zhipu_model: str | None = None
+    openai_api_key: str | None = None
+    openai_model: str | None = None
+    openai_base_url: str | None = None
     rename_prefix: str | None = None
     rename_template: str | None = None
     analysis_concurrency: str | None = None
@@ -546,6 +549,10 @@ async def semantic_search(req: SearchRequest):
     elif engine_name == "zhipu":
         engine_kwargs["api_key"] = settings.get("zhipu_api_key", "")
         engine_kwargs["model"] = settings.get("zhipu_model", "glm-4v-flash")
+    elif engine_name == "openai":
+        engine_kwargs["api_key"] = settings.get("openai_api_key", "")
+        engine_kwargs["model"] = settings.get("openai_model", "gpt-4o-mini")
+        engine_kwargs["base_url"] = settings.get("openai_base_url", "")
 
     engine = get_engine(engine_name, **engine_kwargs)
 
@@ -561,13 +568,15 @@ async def semantic_search(req: SearchRequest):
             from engines.ollama_engine import OllamaEngine
             from engines.gemini_engine import GeminiEngine
             from engines.zhipu_engine import ZhipuEngine
+            from engines.openai_engine import OpenAIEngine
             if isinstance(engine, ClaudeEngine):
                 text = await _claude_text_call(engine, prompt)
             elif isinstance(engine, OllamaEngine):
                 text = await _ollama_text_call(engine, prompt)
             elif isinstance(engine, GeminiEngine):
                 text = await _gemini_text_call(engine, prompt)
-            elif isinstance(engine, ZhipuEngine):
+            elif isinstance(engine, (ZhipuEngine, OpenAIEngine)):
+                # 两者都是 OpenAI 兼容的 chat/completions，文本调用形状一致
                 text = await _zhipu_text_call(engine, prompt)
             else:
                 return {"photos": [], "query": req.query, "error": "CLIP 不支持语义搜索"}
@@ -671,7 +680,7 @@ async def get_tags():
 # ---------------------------------------------------------------------------
 
 # Settings fields holding secrets — never returned in plaintext.
-_SECRET_SETTING_KEYS = ("claude_api_key", "gemini_api_key", "zhipu_api_key")
+_SECRET_SETTING_KEYS = ("claude_api_key", "gemini_api_key", "zhipu_api_key", "openai_api_key")
 _MASK_CHAR = "…"
 
 
@@ -758,6 +767,60 @@ async def export_csv():
 # Test Engine Connection
 # ---------------------------------------------------------------------------
 
+@app.get("/api/openai/models")
+async def openai_models():
+    """拉取当前配置的 OpenAI（或兼容网关）实际支持的模型列表。
+
+    硬编码模型名对自建/代理网关并不成立——它们各有各的模型清单。改为调用标准的
+    GET {base_url}/models，把真实可用的 id 返回给前端下拉。读取已保存的 key/base。
+    """
+    import httpx
+    settings = await db.get_settings()
+    api_key = settings.get("openai_api_key", "")
+    base_url = (settings.get("openai_base_url", "") or "https://api.openai.com/v1").rstrip("/")
+    if not api_key:
+        return {"ok": False, "message": "未配置 API Key", "models": []}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{base_url}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if resp.status_code != 200:
+            return {"ok": False, "message": f"HTTP {resp.status_code}: {resp.text[:200]}", "models": []}
+        data = resp.json()
+        # 兼容多种返回结构：{data:[...]} / {models:[...]} / 直接数组；
+        # 每项可能是字符串，或带 id / name / model 字段的对象。
+        if isinstance(data, dict):
+            rows = data.get("data") or data.get("models") or []
+        elif isinstance(data, list):
+            rows = data
+        else:
+            rows = []
+        ids = set()
+        for m in rows:
+            if isinstance(m, str):
+                mid = m.strip()
+            elif isinstance(m, dict):
+                mid = str(m.get("id") or m.get("name") or m.get("model") or "").strip()
+            else:
+                mid = ""
+            if mid:
+                ids.add(mid)
+        ids = sorted(ids)
+        # 官方 /models 会把账号下所有模型都列出来（embedding/tts/whisper/dall-e…）。
+        # 过滤掉明显非「看图聊天」的，下拉更干净；过滤后为空则退回完整列表。
+        _NON_CHAT = (
+            "embedding", "tts", "whisper", "audio", "transcribe", "realtime",
+            "dall-e", "dalle", "image", "moderation", "rerank", "guard",
+            "search", "similarity", "babbage", "davinci", "ada", "curie",
+        )
+        chat = [i for i in ids if not any(k in i.lower() for k in _NON_CHAT)]
+        return {"ok": True, "models": chat or ids, "total": len(ids)}
+    except Exception as e:
+        return {"ok": False, "message": str(e), "models": []}
+
+
 @app.post("/api/test-engine")
 async def test_engine():
     settings = await db.get_settings()
@@ -776,6 +839,10 @@ async def test_engine():
     elif engine_name == "zhipu":
         engine_kwargs["api_key"] = settings.get("zhipu_api_key", "")
         engine_kwargs["model"] = settings.get("zhipu_model", "glm-4v-flash")
+    elif engine_name == "openai":
+        engine_kwargs["api_key"] = settings.get("openai_api_key", "")
+        engine_kwargs["model"] = settings.get("openai_model", "gpt-4o-mini")
+        engine_kwargs["base_url"] = settings.get("openai_base_url", "")
 
     try:
         engine = get_engine(engine_name, **engine_kwargs)
@@ -851,6 +918,40 @@ def select_folder():
             logger.error(f"Tkinter fallback failed: {e}")
 
     return {"folder_path": path if path else ""}
+
+
+# ---------------------------------------------------------------------------
+# 在系统文件管理器中定位某张照片（Finder / 资源管理器选中该文件）
+# ---------------------------------------------------------------------------
+
+@app.post("/api/photos/{photo_id}/reveal")
+async def reveal_photo(photo_id: int):
+    """在 Finder/资源管理器里打开照片所在文件夹并选中它。
+
+    路径以服务器侧数据库记录的 file_path 为准（不信任前端传入），避免越权打开任意目录。
+    仅桌面端有意义；纯 API/无桌面环境会返回 ok=False。
+    """
+    photo = await db.get_photo(photo_id)
+    if not photo or not photo.get("file_path"):
+        raise HTTPException(404, "照片不存在或无本地路径")
+    target = os.path.abspath(photo["file_path"])
+    if not os.path.exists(target):
+        return {"ok": False, "message": "文件已不在原位置（可能被移动或删除）", "path": target}
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.run(["open", "-R", target], timeout=15)
+        elif system == "Windows":
+            # explorer 用 /select 选中文件；返回码非 0 不代表失败，故不检查
+            subprocess.run(["explorer", "/select,", target], timeout=15)
+        else:
+            # Linux：多数文件管理器不支持选中单文件，退而打开所在目录
+            subprocess.run(["xdg-open", os.path.dirname(target)], timeout=15)
+        return {"ok": True, "path": target}
+    except Exception as e:
+        logger.error(f"Reveal photo {photo_id} failed: {e}")
+        return {"ok": False, "message": str(e), "path": target}
 
 
 # ---------------------------------------------------------------------------

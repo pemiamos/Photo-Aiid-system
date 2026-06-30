@@ -174,10 +174,16 @@ def _assume_role_read(prefix: str) -> dict:
     return _assume_role(prefix, actions=["oss:GetObject"])
 
 
-# 看板缩略图的 OSS 图片处理参数：等比缩到 400px 见方填充裁切 + 质量 80。
-# 原图单张可达 1~2 MB，看板一行九张并发拉原图既慢又易加载不全；交给 OSS
-# 现成出小图后单张仅约 10 KB，秒开且稳定。放大查看仍走原图。
-OSS_THUMB_PROCESS = "image/resize,m_fill,w_400,h_400/quality,q_80"
+# 看板缩略图的 OSS 图片处理参数：先按 EXIF 转正，再等比缩到 400px 框内（不裁剪，
+# 整张照片完整可见）+ 质量 80，统一转成 JPG 输出。原图单张可达 1~2 MB，看板一行九张
+# 并发拉原图既慢又易加载不全；交给 OSS 现成出小图后单张仅约 10 KB，秒开且稳定。
+# m_lfit：等比缩放使整图落在 w×h 内、不裁切——宽幅/竖幅照片都能看到完整构图，方格
+#   里的空白由前端 CSS object-fit:contain 留边（裁切式的 m_fill 会把宽图左右切掉）。
+# auto-orient,1：手机竖拍常把像素按横向存 + EXIF 旋转标记；OSS 默认不读该标记，
+#   会拿未转正的像素去缩，导致缩略图方向错——必须放最前。
+# format,jpg：手机直出的 HEIC 浏览器无法直接显示，转成 JPG 后缩略图才能出图
+#   （也顺带统一其余格式的输出，缓存里都是真 JPEG）。
+OSS_THUMB_PROCESS = "image/auto-orient,1/resize,m_lfit,w_400,h_400/quality,q_80/format,jpg"
 # 可被 OSS 图片处理的扩展名；其余（如视频）直接回退原图，避免处理报错。
 _OSS_IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".heic")
 
@@ -210,6 +216,38 @@ def _oss_presign_get(
     query = {"OSSAccessKeyId": ak, "Expires": deadline, "Signature": signature}
     query.update(subres)   # 查询串里 urlencode 会各自正确编码
     return f"https://{host}/{key_path}?{urllib.parse.urlencode(query)}"
+
+
+# ── 看板缩略图本地缓存 ─────────────────────────────────────────────
+# 思路：OSS 现场处理出小图慢且偶发限流/过期，看板每次展开都现抓既不稳又费流。
+# 改为「首次访问时服务器抓一次 OSS 处理图、落盘缓存，之后都发本地文件」。
+# 服务器是精简版（无 Pillow），缩放仍交给 OSS，本地只存结果字节，零额外依赖。
+_THUMB_CACHE = INTAKE_DATA / ".thumb_cache"
+# 缓存文件名带上「处理参数版本」：改了 OSS_THUMB_PROCESS（如修方向/尺寸）后，
+# 文件名随之变化，旧的过时缓存自动失效、按新参数重新生成，无需手动清缓存目录。
+_THUMB_PROC_VER = hashlib.sha1(OSS_THUMB_PROCESS.encode()).hexdigest()[:8]
+
+
+def _thumb_token(key: str) -> str:
+    """缩略图 URL 的自鉴权签名：<img> 发不了管理口令头，改用 query 里的签名。
+    与 ADMIN_TOKEN 绑定；未设管理口令时返回空串（与后台整体放行一致）。"""
+    if not ADMIN_TOKEN:
+        return ""
+    return hmac.new(ADMIN_TOKEN.encode(), f"thumb:{key}".encode(), hashlib.sha1).hexdigest()[:20]
+
+
+def _thumb_cache_file(key: str) -> Path:
+    return _THUMB_CACHE / f"{hashlib.sha1(key.encode()).hexdigest()}-{_THUMB_PROC_VER}.jpg"
+
+
+def _thumb_url(key: str) -> str:
+    """看板/相册里一张图的缩略图地址（本地缓存端点，自带签名 token）。"""
+    q = {"key": key}
+    sig = _thumb_token(key)
+    if sig:
+        q["sig"] = sig
+    return f"/api/intake/admin/file/thumb?{urllib.parse.urlencode(q)}"
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS books (
@@ -994,7 +1032,9 @@ def _build_file_payload(rows, read_prefix: str | None = None) -> list:
         if mode == "oss":
             url = _oss_presign_get(key, creds)
             is_img = key.lower().endswith(_OSS_IMG_EXTS)
-            thumb = _oss_presign_get(key, creds, process=OSS_THUMB_PROCESS) if is_img else url
+            # 缩略图走本地缓存端点（首访抓一次 OSS 处理图落盘，之后纯本地命中），
+            # 不再每次现签 OSS 处理 URL；非图（视频等）仍回退原图预签名。
+            thumb = _thumb_url(key) if is_img else url
         else:
             url = f"/api/intake/admin/file/raw?key={urllib.parse.quote(key)}"
             thumb = url
@@ -1062,6 +1102,63 @@ async def admin_file_raw(key: str, _: None = Depends(require_admin)):
     if not target.is_relative_to(INTAKE_DATA) or not target.is_file():
         raise HTTPException(404, "文件不存在")
     return FileResponse(target)
+
+
+@router.get("/api/intake/admin/file/thumb")
+async def admin_file_thumb(key: str, sig: str = "", request: Request = None):
+    """看板/相册缩略图，带本地磁盘缓存。
+
+    <img> 标签发不了管理口令头，故不挂 require_admin，改校验 query 里的签名 token
+    （与 ADMIN_TOKEN 绑定，见 _thumb_token）。未设管理口令时整体放行。
+
+    缓存未命中：OSS 模式抓一次 OSS 现场处理出的小图（约 10KB）落盘；本地直存模式
+    无 Pillow，直接发原图当缩略图。命中：发本地文件并带长 Cache-Control，浏览器也缓存。
+    """
+    # ① 鉴权：优先签名 token；带了管理口令头也放行（后台内嵌场景）
+    expect = _thumb_token(key)
+    if expect:
+        ok = hmac.compare_digest(sig or "", expect) or (request is not None and _admin_ok(request))
+        if not ok:
+            raise HTTPException(401, "缩略图签名无效")
+
+    cache = _thumb_cache_file(key)
+    if cache.is_file():
+        return FileResponse(cache, media_type="image/jpeg", headers={
+            "Cache-Control": "public, max-age=604800, immutable",
+        })
+
+    if _oss_configured():
+        if not key.lower().endswith(_OSS_IMG_EXTS):
+            raise HTTPException(415, "该文件无法生成缩略图")
+        # 用最小作用域的只读临时凭证为这一个 object 现签处理 URL，抓回小图字节
+        creds = _assume_role_read(key)
+        proc_url = _oss_presign_get(key, creds, process=OSS_THUMB_PROCESS)
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as cli:
+                resp = await cli.get(proc_url)
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"拉取缩略图失败：{e}")
+        if resp.status_code != 200 or not resp.content:
+            raise HTTPException(502, f"OSS 缩略图处理失败（{resp.status_code}）")
+        data = resp.content
+    else:
+        src = (INTAKE_DATA / key).resolve()
+        if not src.is_relative_to(INTAKE_DATA) or not src.is_file():
+            raise HTTPException(404, "文件不存在")
+        data = src.read_bytes()   # 本地无 Pillow，原图直接当缩略图
+
+    # 落盘：先写临时文件再原子改名，避免并发/中断写出半截文件
+    try:
+        _THUMB_CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_suffix(".jpg.part")
+        tmp.write_bytes(data)
+        os.replace(tmp, cache)
+    except OSError:
+        pass   # 缓存写失败不致命，本次仍直接把字节发回
+
+    return Response(content=data, media_type="image/jpeg", headers={
+        "Cache-Control": "public, max-age=604800, immutable",
+    })
 
 
 # ---------------------------------------------------------------------------

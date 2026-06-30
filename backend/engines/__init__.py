@@ -10,6 +10,7 @@ from engines.claude_engine import ClaudeEngine
 from engines.ollama_engine import OllamaEngine
 from engines.gemini_engine import GeminiEngine
 from engines.zhipu_engine import ZhipuEngine
+from engines.openai_engine import OpenAIEngine
 
 # Registry: name -> engine class
 ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
@@ -17,6 +18,7 @@ ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
     "ollama": OllamaEngine,
     "gemini": GeminiEngine,
     "zhipu": ZhipuEngine,
+    "openai": OpenAIEngine,
 }
 
 # Try to register CLIP (optional dependency)
