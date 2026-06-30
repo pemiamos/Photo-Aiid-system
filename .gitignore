@@ -31,6 +31,9 @@ backend/intake_data/
 .DS_Store
 Thumbs.db
 
+# 生成的 PDF 文档（体积大，单独分发，不入库）
+docs/*.pdf
+
 # Environment
 .env
 .env.local
