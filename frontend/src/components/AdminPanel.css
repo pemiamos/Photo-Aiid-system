@@ -441,6 +441,83 @@
 }
 .grid-empty { color: var(--muted); font-size: 13px; padding: 18px 12px; }
 
+/* ── 缩略图墙工具条 / 多选 ── */
+.grid-toolbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px 0; flex-wrap: wrap;
+}
+.grid-sel-count { font-size: 13px; color: var(--muted); }
+.folder-title { font-size: 14px; }
+.file-grid.selecting .thumb { cursor: pointer; }
+.thumb.selected { border-color: var(--amber); box-shadow: inset 0 0 0 2px var(--amber); }
+.thumb-check {
+  position: absolute; top: 6px; left: 6px;
+  width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #1a1408;
+  background: rgba(0,0,0,.4); border: 1.5px solid #fff;
+}
+.thumb.selected .thumb-check { background: var(--amber); border-color: var(--amber); }
+
+/* ── 存入文件夹下拉 ── */
+.store-menu { position: relative; display: inline-flex; }
+.store-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
+  min-width: 200px; max-height: 280px; overflow-y: auto;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+}
+.store-empty { font-size: 12px; color: var(--muted); padding: 8px 10px; }
+.store-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: none; cursor: pointer; color: var(--text);
+  font-size: 13px; text-align: left; padding: 8px 10px; border-radius: 6px;
+}
+.store-item:hover { background: var(--panel); }
+.store-item-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.store-item-count { font-size: 11px; color: var(--faint); }
+.store-new { color: var(--amber); border-top: 1px solid var(--line); margin-top: 4px; }
+
+/* ── 投稿码管理：征稿开关状态条 ── */
+.intake-status-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 14px; margin-bottom: 12px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel);
+}
+.intake-status-bar.closed { border-color: var(--warn); background: var(--panel-2); }
+.intake-state { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+.intake-prefix { font-size: 12px; color: var(--muted); }
+.intake-prefix b { color: var(--amber); }
+
+/* ── 照片管理：双栏（文件夹列 / 照片墙）── */
+.manage-body { padding: 0; }
+.manage-split { display: grid; grid-template-columns: 260px 1fr; gap: 14px; align-items: start; }
+.folder-list { display: flex; flex-direction: column; gap: 8px; }
+.folder-head {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--muted); padding: 2px 0 4px;
+}
+.folder-card {
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--panel); padding: 10px 12px; cursor: pointer;
+}
+.folder-card:hover { border-color: var(--faint); }
+.folder-card.active {
+  border-color: var(--amber-dim); background: var(--panel-2);
+  box-shadow: inset 3px 0 0 var(--amber);
+}
+.folder-card-main { display: flex; flex-direction: column; gap: 3px; }
+.folder-name { font-size: 14px; font-weight: 600; }
+.folder-meta { font-size: 12px; color: var(--muted); }
+.folder-actions {
+  display: flex; gap: 12px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.folder-detail {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); min-height: 200px;
+}
+
 /* ── 放大查看 / 弹窗遮罩 ── */
 .lightbox {
   position: fixed; inset: 0; z-index: 70;

@@ -386,6 +386,11 @@ export async function intakeDeleteCode(pid) {
   return intakeFetch(`/intake/admin/codes/${pid}`, { method: 'DELETE' })
 }
 
+// 开启 / 停止某本书的征稿（open=true 开放，false 停止）
+export async function intakeSetBookIntake(code, open) {
+  return intakeForm(`/intake/admin/books/${encodeURIComponent(code)}/intake`, { open: open ? 1 : 0 })
+}
+
 /* ── 看板下钻：某投稿码的照片列表 ── */
 export async function intakeFiles(code) {
   return intakeFetch(`/intake/admin/files?code=${encodeURIComponent(code)}`)
@@ -399,6 +404,61 @@ export function intakeImageSrc(url) {
   if (/^https?:\/\//i.test(url)) return url
   const base = getIntakeServer().base || ''
   return `${base}${url}`
+}
+
+/* ── 照片管理：相册（文件夹） ── */
+export async function intakeCollections(book = '') {
+  return intakeFetch(`/intake/admin/collections${bookQuery(book)}`)
+}
+
+export async function intakeCreateCollection(book, name) {
+  return intakeForm('/intake/admin/collections', { book, name })
+}
+
+export async function intakeRenameCollection(cid, name) {
+  return intakeFetch(`/intake/admin/collections/${cid}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ name }).toString(),
+  })
+}
+
+export async function intakeDeleteCollection(cid) {
+  return intakeFetch(`/intake/admin/collections/${cid}`, { method: 'DELETE' })
+}
+
+export async function intakeCollectionFiles(cid) {
+  return intakeFetch(`/intake/admin/collections/${cid}/files`)
+}
+
+// 把一批照片（file_id 数组）加入 / 移出相册
+export async function intakeCollectionAdd(cid, fileIds) {
+  return intakeForm(`/intake/admin/collections/${cid}/items`, { file_ids: fileIds.join(',') })
+}
+
+export async function intakeCollectionRemove(cid, fileIds) {
+  return intakeFetch(`/intake/admin/collections/${cid}/items`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ file_ids: fileIds.join(',') }).toString(),
+  })
+}
+
+// 整个相册打包 zip 下载（带管理口令头取 blob，再触发浏览器保存）
+export async function intakeDownloadCollection(cid, name = '相册') {
+  const url = `${intakeApiRoot()}/intake/admin/collections/${cid}/download`
+  const res = await fetch(url, { headers: intakeHeaders() })
+  if (!res.ok) throw new Error(`下载失败: HTTP ${res.status}`)
+  const blob = await res.blob()
+  let fname = `${name}.zip`
+  const cd = res.headers.get('content-disposition') || ''
+  const m = cd.match(/filename\*=UTF-8''([^;]+)/i)
+  if (m) { try { fname = decodeURIComponent(m[1]) } catch { /* keep fallback */ } }
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = fname
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000)
 }
 
 /* ── R2 归档：一键触发 + 状态轮询 ── */

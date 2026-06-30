@@ -22,15 +22,19 @@ import json
 import os
 import re
 import shutil
+import string
+import tempfile
 import time
 import urllib.parse
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Form, UploadFile, File, HTTPException, Request, Response, Depends
 from fastapi.responses import FileResponse, HTMLResponse
+from starlette.background import BackgroundTask
 
 import database as db
 
@@ -170,31 +174,42 @@ def _assume_role_read(prefix: str) -> dict:
     return _assume_role(prefix, actions=["oss:GetObject"])
 
 
-def _oss_presign_get(object_key: str, creds: dict, expires: int = 600) -> str:
+# 看板缩略图的 OSS 图片处理参数：等比缩到 400px 见方填充裁切 + 质量 80。
+# 原图单张可达 1~2 MB，看板一行九张并发拉原图既慢又易加载不全；交给 OSS
+# 现成出小图后单张仅约 10 KB，秒开且稳定。放大查看仍走原图。
+OSS_THUMB_PROCESS = "image/resize,m_fill,w_400,h_400/quality,q_80"
+# 可被 OSS 图片处理的扩展名；其余（如视频）直接回退原图，避免处理报错。
+_OSS_IMG_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".heic")
+
+
+def _oss_presign_get(
+    object_key: str, creds: dict, expires: int = 600, process: str | None = None
+) -> str:
     """用 STS 临时凭证为私有桶里的一个 object 生成预签名 GET URL（OSS 签名 V1）。
 
     security-token 既作为查询参数，又作为子资源参与 CanonicalizedResource——这是
     阿里云 V1 的硬性要求（子资源白名单含 security-token），漏掉则签名校验失败。
+    process 传入时（如 image/resize 缩略图），x-oss-process 同样是签名子资源，
+    须按字典序与 security-token 一起拼进 CanonicalizedResource，否则 403。
     """
     ak = creds["AccessKeyId"]
     sk = creds["AccessKeySecret"]
     token = creds["SecurityToken"]
     deadline = int(time.time()) + expires
-    # CanonicalizedResource 用「未编码」的 key 与 token；查询串里再各自编码
-    canonical_resource = f"/{OSS_BUCKET}/{object_key}?security-token={token}"
-    string_to_sign = f"GET\n\n\n{deadline}\n{canonical_resource}"
+    # 参与签名的子资源：用「未编码」的原始值拼 CanonicalizedResource，并按 key 字典序排列
+    subres = {"security-token": token}
+    if process:
+        subres["x-oss-process"] = process
+    canon = "&".join(f"{k}={subres[k]}" for k in sorted(subres))
+    string_to_sign = f"GET\n\n\n{deadline}\n/{OSS_BUCKET}/{object_key}?{canon}"
     signature = base64.b64encode(
         hmac.new(sk.encode(), string_to_sign.encode(), hashlib.sha1).digest()
     ).decode()
     host = f"{OSS_BUCKET}.{OSS_REGION}.aliyuncs.com"
     key_path = urllib.parse.quote(object_key, safe="/")
-    qs = urllib.parse.urlencode({
-        "OSSAccessKeyId": ak,
-        "Expires": deadline,
-        "Signature": signature,
-        "security-token": token,
-    })
-    return f"https://{host}/{key_path}?{qs}"
+    query = {"OSSAccessKeyId": ak, "Expires": deadline, "Signature": signature}
+    query.update(subres)   # 查询串里 urlencode 会各自正确编码
+    return f"https://{host}/{key_path}?{urllib.parse.urlencode(query)}"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS books (
@@ -238,6 +253,23 @@ CREATE TABLE IF NOT EXISTS submission_files (
     status        TEXT NOT NULL DEFAULT 'done',
     created_at    REAL NOT NULL
 );
+
+-- 照片管理：编辑端从征稿看板挑片归入的「相册/文件夹」（每本书各自独立）。
+-- 只存引用，不复制 OSS 字节；删除相册或移出照片都不影响原投稿与原图。
+CREATE TABLE IF NOT EXISTS collections (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_code   TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    created_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS collection_items (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL,
+    file_id       INTEGER NOT NULL,   -- → submission_files.id
+    added_at      REAL NOT NULL,
+    UNIQUE(collection_id, file_id)    -- 同一相册内同一张照片不重复
+);
 """
 
 # 提交时随照片一起上传的本地 AI 索引字段（App 投稿模式用；网页留空）
@@ -257,6 +289,15 @@ async def init_intake_db():
                 await conn.execute(
                     f"ALTER TABLE submission_files ADD COLUMN {col} TEXT"
                 )
+        # 老库迁移：books 增加「征稿开关」与「投稿码前缀」两列
+        bcols = await conn.execute_fetchall("PRAGMA table_info(books)")
+        bexisting = {c["name"] for c in bcols}
+        if "intake_open" not in bexisting:
+            await conn.execute(
+                "ALTER TABLE books ADD COLUMN intake_open INTEGER NOT NULL DEFAULT 1"
+            )
+        if "code_prefix" not in bexisting:
+            await conn.execute("ALTER TABLE books ADD COLUMN code_prefix TEXT")
         now = time.time()
         # 种入默认画册（来自环境变量，向后兼容单本配置）
         await conn.execute(
@@ -289,8 +330,70 @@ async def init_intake_db():
                 (BOOK_CODE, code, name, contact, now),
             )
         await conn.commit()
+        # 回填每本书的投稿码前缀：先按已有投稿码推断（test 本固定为 A），
+        # 其余书依次分配未占用的字母（B、C…），从此各书投稿码分段不撞。
+        await _backfill_prefixes(conn)
     finally:
         await conn.close()
+
+
+def _free_prefix(used: set) -> str:
+    """返回一个未被占用的投稿码前缀字母（A–Z，用尽则 AA、AB…）。"""
+    for ch in string.ascii_uppercase:
+        if ch not in used:
+            return ch
+    for a in string.ascii_uppercase:
+        for b in string.ascii_uppercase:
+            if (p := a + b) not in used:
+                return p
+    return "X"
+
+
+async def _backfill_prefixes(conn):
+    """给每本书分配**全局唯一**的投稿码前缀字母，并自愈历史重复。
+
+    旧版投稿码是全库连续的 A01、A02…（不分书），因此多本书可能都含 A 码、推断出
+    同一个前缀。这里：先按「该书匹配某字母的投稿码数量」从多到少排序，让占有最多的书
+    锁定该字母；后来的撞车者清空、改派空闲字母。无历史码的书直接取空闲字母。幂等：
+    每次启动都重算，已正确的不动。
+    """
+    books = await conn.execute_fetchall("SELECT code, code_prefix FROM books")
+    # 统计每本书各前缀字母的投稿码数量，取其主导字母与该字母的票数
+    infos = []
+    for b in books:
+        ph = await conn.execute_fetchall(
+            "SELECT invite_code FROM photographers WHERE book_code = ?", (b["code"],)
+        )
+        tally = {}
+        for r in ph:
+            m = re.match(r"^([A-Z]+)\d+$", (r["invite_code"] or "").upper())
+            if m:
+                tally[m.group(1)] = tally.get(m.group(1), 0) + 1
+        best = max(tally, key=tally.get) if tally else None
+        votes = tally.get(best, 0) if best else 0
+        infos.append({"code": b["code"], "cur": b["code_prefix"], "best": best, "votes": votes})
+
+    # 票数多者优先锁定其主导字母（确保主力书保住 A），其余撞车者落到第二轮
+    infos.sort(key=lambda x: -x["votes"])
+    used, assign = set(), {}
+    for it in infos:
+        pref = it["best"] or it["cur"]
+        if pref and pref not in used:
+            used.add(pref)
+            assign[it["code"]] = pref
+    for it in infos:
+        if it["code"] in assign:
+            continue
+        pref = _free_prefix(used)
+        used.add(pref)
+        assign[it["code"]] = pref
+
+    for code, pref in assign.items():
+        await conn.execute(
+            "UPDATE books SET code_prefix = ? WHERE code = ? AND IFNULL(code_prefix,'') != ?",
+            (pref, code, pref),
+        )
+    await conn.commit()
 
 
 def _safe(part: str) -> str:
@@ -337,20 +440,51 @@ async def _resolve_book(conn, book: str) -> str:
     return await _default_book(conn)
 
 
-async def _next_code(conn, book_code: str = "") -> str:
-    """生成下一个 A01、A02… 投稿码。
+async def _ensure_book_prefix(conn, book_code: str) -> str:
+    """取某本书的投稿码前缀字母；没有就现分配一个空闲字母并持久化。"""
+    row = await conn.execute_fetchall(
+        "SELECT code_prefix FROM books WHERE code = ?", (book_code,)
+    )
+    if row and row[0]["code_prefix"]:
+        return row[0]["code_prefix"]
+    used = {
+        r["code_prefix"]
+        for r in await conn.execute_fetchall(
+            "SELECT code_prefix FROM books WHERE code_prefix IS NOT NULL"
+        )
+    }
+    pref = _free_prefix(used)
+    await conn.execute(
+        "UPDATE books SET code_prefix = ? WHERE code = ?", (pref, book_code)
+    )
+    await conn.commit()
+    return pref
 
-    invite_code 在全库唯一，因此序号按全局最大值递增（而非按画册），
-    多本画册共用一条不重复的序列，避免跨画册撞码。book_code 参数保留
-    以兼容调用方，当前不参与计算。
+
+async def _next_code(conn, book_code: str = "") -> str:
+    """生成该书下一个投稿码，如 B01、B02…
+
+    每本书有独立前缀字母（code_prefix），投稿码 = 前缀 + 两位序号。前缀全局唯一，
+    因此即便序号按前缀各自递增，跨书也不会撞码。
     """
+    book_code = book_code or await _default_book(conn)
+    pref = await _ensure_book_prefix(conn, book_code)
     rows = await conn.execute_fetchall("SELECT invite_code FROM photographers")
+    pat = re.compile(rf"^{re.escape(pref)}(\d+)$")
     mx = 0
     for r in rows:
-        m = re.match(r"^A(\d+)$", r["invite_code"] or "")
+        m = pat.match((r["invite_code"] or "").upper())
         if m:
             mx = max(mx, int(m.group(1)))
-    return f"A{mx + 1:02d}"
+    return f"{pref}{mx + 1:02d}"
+
+
+async def _book_open(conn, book_code: str) -> bool:
+    """该书是否仍在征稿（intake_open）。查不到按开放处理，避免误伤。"""
+    row = await conn.execute_fetchall(
+        "SELECT intake_open FROM books WHERE code = ?", (book_code,)
+    )
+    return bool(row[0]["intake_open"]) if row else True
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +508,8 @@ async def verify(code: str = Form(...)):
 
     conn = await db.get_db()
     try:
+        if not await _book_open(conn, p["book_code"]):
+            raise HTTPException(403, "本书征稿已结束，感谢您的参与")
         rows = await conn.execute_fetchall(
             "SELECT sf.content_label AS label, COUNT(*) AS cnt, "
             "       MAX(sf.created_at) AS last_at "
@@ -416,6 +552,8 @@ async def submit(code: str = Form(...), license_agreed: int = Form(0)):
     now = time.time()
     conn = await db.get_db()
     try:
+        if not await _book_open(conn, p["book_code"]):
+            raise HTTPException(403, "本书征稿已结束，暂不接收新照片")
         cur = await conn.execute(
             "INSERT INTO submissions "
             "(photographer_id, license_agreed, license_at, status, created_at) "
@@ -502,6 +640,8 @@ async def upload(
         if not rows:
             raise HTTPException(404, "投稿会话不存在")
         sub = rows[0]
+        if not await _book_open(conn, sub["book_code"]):
+            raise HTTPException(403, "本书征稿已结束，暂不接收新照片")
 
         prefix = _photographer_prefix(sub["invite_code"], sub["name"], sub["book_code"])
         rel_key = f"{prefix}{label}/{_safe(file.filename)}"
@@ -547,6 +687,12 @@ async def sts(code: str = Form(...)):
     p = await _get_photographer(_safe(code).upper())
     if not p:
         raise HTTPException(404, "投稿码无效")
+    conn = await db.get_db()
+    try:
+        if not await _book_open(conn, p["book_code"]):
+            raise HTTPException(403, "本书征稿已结束，暂不接收新照片")
+    finally:
+        await conn.close()
     prefix = _photographer_prefix(p["invite_code"], p["name"], p["book_code"])
     creds = _assume_role(prefix)
     return {
@@ -583,6 +729,8 @@ async def record(
         )
         if not rows:
             raise HTTPException(404, "投稿会话不存在")
+        if not await _book_open(conn, rows[0]["book_code"]):
+            raise HTTPException(403, "本书征稿已结束，暂不接收新照片")
         prefix = _photographer_prefix(
             rows[0]["invite_code"], rows[0]["name"], rows[0]["book_code"])
         if not object_key.startswith(prefix):
@@ -631,7 +779,7 @@ async def list_books(_: None = Depends(require_admin)):
     conn = await db.get_db()
     try:
         books = await conn.execute_fetchall(
-            "SELECT code, title, status, created_at FROM books "
+            "SELECT code, title, status, intake_open, code_prefix, created_at FROM books "
             "ORDER BY (status='archived'), created_at DESC"
         )
         result = []
@@ -652,6 +800,8 @@ async def list_books(_: None = Depends(require_admin)):
                 "code": b["code"],
                 "title": b["title"],
                 "status": b["status"],
+                "intake_open": bool(b["intake_open"]),
+                "code_prefix": b["code_prefix"] or "",
                 "created_at": b["created_at"],
                 "created": time.strftime("%Y-%m-%d", time.localtime(b["created_at"])),
                 "people": st["people"] or 0,
@@ -691,7 +841,8 @@ async def create_book(
             (code, title, time.time()),
         )
         await conn.commit()
-        return {"ok": True, "code": code, "title": title}
+        prefix = await _ensure_book_prefix(conn, code)   # 立即分配独立投稿码前缀
+        return {"ok": True, "code": code, "title": title, "code_prefix": prefix}
     finally:
         await conn.close()
 
@@ -714,6 +865,28 @@ async def set_book_status(
         if cur.rowcount == 0:
             raise HTTPException(404, "画册不存在")
         return {"ok": True, "code": code, "status": status}
+    finally:
+        await conn.close()
+
+
+@router.post("/api/intake/admin/books/{code}/intake")
+async def set_book_intake(
+    code: str,
+    open: int = Form(...),   # 1=开放征稿，0=停止征稿
+    _: None = Depends(require_admin),
+):
+    """开启 / 停止某本书的征稿。停止后摄影师无法再校验投稿码或上传照片，
+    但已收到的照片与看板/相册数据完全不受影响。"""
+    val = 1 if int(open) else 0
+    conn = await db.get_db()
+    try:
+        cur = await conn.execute(
+            "UPDATE books SET intake_open = ? WHERE code = ?", (val, code)
+        )
+        await conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "画册不存在")
+        return {"ok": True, "code": code, "intake_open": bool(val)}
     finally:
         await conn.close()
 
@@ -799,44 +972,32 @@ async def admin_submissions(book: str = "", _: None = Depends(require_admin)):
     }
 
 
-@router.get("/api/intake/admin/files")
-async def admin_photographer_files(code: str, _: None = Depends(require_admin)):
-    """看板下钻：列出某投稿码下所有照片，并给出可直接 <img> 预览的 url。
+# 看板/相册照片列表统一用的列；_build_file_payload 依赖这些字段名。
+_FILE_COLUMNS = (
+    "sf.id, sf.content_label, sf.object_key, sf.file_name, sf.file_size, "
+    "sf.location, sf.category, sf.description, sf.tags, sf.created_at"
+)
 
-    OSS 模式：为该摄影师前缀签发只读临时凭证，逐张生成预签名 GET URL（10 分钟有效）。
-    本地直存：url 指向受管理鉴权保护的 /api/intake/admin/file/raw 代理。
+
+def _build_file_payload(rows, read_prefix: str | None = None) -> list:
+    """把 submission_files 行渲染成带可预览 url/thumb 的字典列表。
+
+    OSS 模式：用 read_prefix 一次性签发只读临时凭证（看板用摄影师前缀，相册跨
+    多个摄影师则传「书」级前缀 {book}/，policy 覆盖全书），逐张生成预签名 GET URL
+    与缩略图 URL。本地直存：url 指向受鉴权的 raw 代理。
     """
-    p = await _get_photographer(_safe(code).upper())
-    if not p:
-        raise HTTPException(404, "投稿码无效")
-
-    conn = await db.get_db()
-    try:
-        rows = await conn.execute_fetchall(
-            "SELECT sf.id, sf.content_label, sf.object_key, sf.file_name, "
-            "       sf.file_size, sf.location, sf.category, sf.description, "
-            "       sf.tags, sf.created_at "
-            "FROM submission_files sf "
-            "JOIN submissions s ON sf.submission_id = s.id "
-            "WHERE s.photographer_id = ? ORDER BY sf.created_at DESC, sf.id DESC",
-            (p["id"],),
-        )
-    finally:
-        await conn.close()
-
     mode = "oss" if _oss_configured() else "local"
-    creds = None
-    if mode == "oss" and rows:
-        prefix = _photographer_prefix(p["invite_code"], p["name"], p["book_code"])
-        creds = _assume_role_read(prefix)
-
+    creds = _assume_role_read(read_prefix) if (mode == "oss" and rows and read_prefix) else None
     files = []
     for r in rows:
         key = r["object_key"]
         if mode == "oss":
             url = _oss_presign_get(key, creds)
+            is_img = key.lower().endswith(_OSS_IMG_EXTS)
+            thumb = _oss_presign_get(key, creds, process=OSS_THUMB_PROCESS) if is_img else url
         else:
             url = f"/api/intake/admin/file/raw?key={urllib.parse.quote(key)}"
+            thumb = url
         try:
             tags = json.loads(r["tags"]) if r["tags"] else []
         except (ValueError, TypeError):
@@ -852,13 +1013,41 @@ async def admin_photographer_files(code: str, _: None = Depends(require_admin)):
             "description": r["description"] or "",
             "tags": tags if isinstance(tags, list) else [],
             "url": url,
+            "thumb": thumb,
             "date": time.strftime("%Y-%m-%d %H:%M", time.localtime(r["created_at"])),
         })
+    return files
 
+
+@router.get("/api/intake/admin/files")
+async def admin_photographer_files(code: str, _: None = Depends(require_admin)):
+    """看板下钻：列出某投稿码下所有照片，并给出可直接 <img> 预览的 url。
+
+    OSS 模式：为该摄影师前缀签发只读临时凭证，逐张生成预签名 GET URL（10 分钟有效）。
+    本地直存：url 指向受管理鉴权保护的 /api/intake/admin/file/raw 代理。
+    """
+    p = await _get_photographer(_safe(code).upper())
+    if not p:
+        raise HTTPException(404, "投稿码无效")
+
+    conn = await db.get_db()
+    try:
+        rows = await conn.execute_fetchall(
+            f"SELECT {_FILE_COLUMNS} "
+            "FROM submission_files sf "
+            "JOIN submissions s ON sf.submission_id = s.id "
+            "WHERE s.photographer_id = ? ORDER BY sf.created_at DESC, sf.id DESC",
+            (p["id"],),
+        )
+    finally:
+        await conn.close()
+
+    prefix = _photographer_prefix(p["invite_code"], p["name"], p["book_code"])
+    files = _build_file_payload(rows, read_prefix=prefix)
     return {
         "code": p["invite_code"],
         "name": p["name"],
-        "mode": mode,
+        "mode": "oss" if _oss_configured() else "local",
         "count": len(files),
         "files": files,
     }
@@ -873,6 +1062,276 @@ async def admin_file_raw(key: str, _: None = Depends(require_admin)):
     if not target.is_relative_to(INTAKE_DATA) or not target.is_file():
         raise HTTPException(404, "文件不存在")
     return FileResponse(target)
+
+
+# ---------------------------------------------------------------------------
+# 照片管理：相册（文件夹）
+#
+# 编辑端从征稿看板挑片归入相册、整包下载到本地。相册只存对 submission_files 的
+# 引用（collection_items），不复制 OSS 字节；删相册/移出照片都不动原图。
+# ---------------------------------------------------------------------------
+
+async def _book_prefix(conn, book_code: str) -> str:
+    """某本书在桶内的根前缀 {book}/，用于跨摄影师签发只读凭证。"""
+    return f"{_safe(book_code)}/"
+
+
+async def _get_collection(conn, cid: int):
+    rows = await conn.execute_fetchall(
+        "SELECT id, book_code, name, created_at FROM collections WHERE id = ?", (cid,)
+    )
+    return rows[0] if rows else None
+
+
+def _parse_ids(raw: str) -> list:
+    """把 '1,2,3' 形式的 file_id 串解析成去重后的整数列表。"""
+    out = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            v = int(part)
+            if v not in out:
+                out.append(v)
+    return out
+
+
+@router.get("/api/intake/admin/collections")
+async def list_collections(book: str = "", _: None = Depends(require_admin)):
+    """列出某本书的全部相册（含照片张数）。"""
+    conn = await db.get_db()
+    try:
+        where, params = ("WHERE c.book_code = ?", (book,)) if book else ("", ())
+        rows = await conn.execute_fetchall(
+            "SELECT c.id, c.name, c.book_code, c.created_at, "
+            "  (SELECT COUNT(*) FROM collection_items ci WHERE ci.collection_id = c.id) AS cnt "
+            f"FROM collections c {where} ORDER BY c.created_at DESC, c.id DESC",
+            params,
+        )
+    finally:
+        await conn.close()
+    return {"collections": [{
+        "id": r["id"], "name": r["name"], "count": r["cnt"],
+        "date": time.strftime("%Y-%m-%d %H:%M", time.localtime(r["created_at"])),
+    } for r in rows]}
+
+
+@router.post("/api/intake/admin/collections")
+async def create_collection(
+    book: str = Form(...), name: str = Form(...), _: None = Depends(require_admin)
+):
+    """在某本书下新建一个相册（文件夹）。"""
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(400, "文件夹名不能为空")
+    conn = await db.get_db()
+    try:
+        cur = await conn.execute(
+            "INSERT INTO collections (book_code, name, created_at) VALUES (?, ?, ?)",
+            (book, name, time.time()),
+        )
+        await conn.commit()
+        return {"ok": True, "id": cur.lastrowid, "name": name, "count": 0}
+    finally:
+        await conn.close()
+
+
+@router.patch("/api/intake/admin/collections/{cid}")
+async def rename_collection(
+    cid: int, name: str = Form(...), _: None = Depends(require_admin)
+):
+    """重命名相册。"""
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(400, "文件夹名不能为空")
+    conn = await db.get_db()
+    try:
+        if not await _get_collection(conn, cid):
+            raise HTTPException(404, "文件夹不存在")
+        await conn.execute("UPDATE collections SET name = ? WHERE id = ?", (name, cid))
+        await conn.commit()
+        return {"ok": True, "id": cid, "name": name}
+    finally:
+        await conn.close()
+
+
+@router.delete("/api/intake/admin/collections/{cid}")
+async def delete_collection(cid: int, _: None = Depends(require_admin)):
+    """删除相册及其内的引用（不影响原投稿照片）。"""
+    conn = await db.get_db()
+    try:
+        if not await _get_collection(conn, cid):
+            raise HTTPException(404, "文件夹不存在")
+        await conn.execute("DELETE FROM collection_items WHERE collection_id = ?", (cid,))
+        await conn.execute("DELETE FROM collections WHERE id = ?", (cid,))
+        await conn.commit()
+        return {"ok": True}
+    finally:
+        await conn.close()
+
+
+@router.get("/api/intake/admin/collections/{cid}/files")
+async def collection_files(cid: int, _: None = Depends(require_admin)):
+    """列出相册内照片（与看板下钻同结构，带 thumb/原图预签名 URL）。"""
+    conn = await db.get_db()
+    try:
+        c = await _get_collection(conn, cid)
+        if not c:
+            raise HTTPException(404, "文件夹不存在")
+        rows = await conn.execute_fetchall(
+            f"SELECT {_FILE_COLUMNS} FROM submission_files sf "
+            "JOIN collection_items ci ON ci.file_id = sf.id "
+            "WHERE ci.collection_id = ? ORDER BY ci.added_at DESC, ci.id DESC",
+            (cid,),
+        )
+        prefix = await _book_prefix(conn, c["book_code"])
+    finally:
+        await conn.close()
+    files = _build_file_payload(rows, read_prefix=prefix)
+    return {
+        "id": cid, "name": c["name"],
+        "mode": "oss" if _oss_configured() else "local",
+        "count": len(files), "files": files,
+    }
+
+
+@router.post("/api/intake/admin/collections/{cid}/items")
+async def add_collection_items(
+    cid: int, file_ids: str = Form(...), _: None = Depends(require_admin)
+):
+    """把一批照片（file_id 列表）加入相册；已在册的自动忽略。"""
+    ids = _parse_ids(file_ids)
+    if not ids:
+        raise HTTPException(400, "未选择照片")
+    now = time.time()
+    conn = await db.get_db()
+    try:
+        if not await _get_collection(conn, cid):
+            raise HTTPException(404, "文件夹不存在")
+        # 只接受确实存在的 file_id，避免脏引用
+        placeholders = ",".join("?" * len(ids))
+        valid = await conn.execute_fetchall(
+            f"SELECT id FROM submission_files WHERE id IN ({placeholders})", ids
+        )
+        valid_ids = [r["id"] for r in valid]
+        for fid in valid_ids:
+            await conn.execute(
+                "INSERT OR IGNORE INTO collection_items "
+                "(collection_id, file_id, added_at) VALUES (?, ?, ?)",
+                (cid, fid, now),
+            )
+        await conn.commit()
+        total = await conn.execute_fetchall(
+            "SELECT COUNT(*) AS cnt FROM collection_items WHERE collection_id = ?", (cid,)
+        )
+        return {"ok": True, "added": len(valid_ids), "count": total[0]["cnt"]}
+    finally:
+        await conn.close()
+
+
+@router.delete("/api/intake/admin/collections/{cid}/items")
+async def remove_collection_items(
+    cid: int, file_ids: str = Form(...), _: None = Depends(require_admin)
+):
+    """从相册移出一批照片（不删原图）。"""
+    ids = _parse_ids(file_ids)
+    if not ids:
+        raise HTTPException(400, "未选择照片")
+    conn = await db.get_db()
+    try:
+        if not await _get_collection(conn, cid):
+            raise HTTPException(404, "文件夹不存在")
+        placeholders = ",".join("?" * len(ids))
+        await conn.execute(
+            f"DELETE FROM collection_items WHERE collection_id = ? AND file_id IN ({placeholders})",
+            (cid, *ids),
+        )
+        await conn.commit()
+        total = await conn.execute_fetchall(
+            "SELECT COUNT(*) AS cnt FROM collection_items WHERE collection_id = ?", (cid,)
+        )
+        return {"ok": True, "count": total[0]["cnt"]}
+    finally:
+        await conn.close()
+
+
+def _zip_member_name(file_name: str, used: set) -> str:
+    """为 zip 内成员去重命名：同名追加 (1)(2)…，保留扩展名。"""
+    name = file_name or "photo"
+    if name not in used:
+        used.add(name)
+        return name
+    stem, dot, ext = name.rpartition(".")
+    base = stem if dot else name
+    suffix = (dot + ext) if dot else ""
+    i = 1
+    while f"{base} ({i}){suffix}" in used:
+        i += 1
+    out = f"{base} ({i}){suffix}"
+    used.add(out)
+    return out
+
+
+@router.get("/api/intake/admin/collections/{cid}/download")
+async def download_collection(cid: int, _: None = Depends(require_admin)):
+    """把相册内全部照片的原图实时打包成 zip 流给浏览器下载。
+
+    OSS 模式：用书级只读凭证逐张预签名 GET 拉取原图；本地直存：直接读磁盘。
+    打包到临时文件后以 FileResponse 返回，下载完成由 BackgroundTask 清理临时文件。
+    """
+    conn = await db.get_db()
+    try:
+        c = await _get_collection(conn, cid)
+        if not c:
+            raise HTTPException(404, "文件夹不存在")
+        rows = await conn.execute_fetchall(
+            "SELECT sf.object_key, sf.file_name FROM submission_files sf "
+            "JOIN collection_items ci ON ci.file_id = sf.id "
+            "WHERE ci.collection_id = ? ORDER BY ci.added_at DESC, ci.id DESC",
+            (cid,),
+        )
+        book_code = c["book_code"]
+        coll_name = c["name"]
+    finally:
+        await conn.close()
+
+    if not rows:
+        raise HTTPException(400, "文件夹是空的，没有可下载的照片")
+
+    mode = "oss" if _oss_configured() else "local"
+    creds = _assume_role_read(f"{_safe(book_code)}/") if mode == "oss" else None
+
+    tmp = tempfile.NamedTemporaryFile(prefix="coll_", suffix=".zip", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+    try:
+        used = set()
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                for r in rows:
+                    member = _zip_member_name(r["file_name"], used)
+                    if mode == "oss":
+                        url = _oss_presign_get(r["object_key"], creds)
+                        resp = await client.get(url)
+                        if resp.status_code != 200:
+                            continue   # 跳过取不到的单张，不让整包失败
+                        zf.writestr(member, resp.content)
+                    else:
+                        target = (INTAKE_DATA / r["object_key"]).resolve()
+                        if target.is_relative_to(INTAKE_DATA) and target.is_file():
+                            zf.write(target, member)
+    except Exception:
+        os.path.exists(tmp_path) and os.remove(tmp_path)
+        raise
+
+    safe_name = _safe(coll_name) or "相册"
+    download_name = f"{safe_name}.zip"
+    quoted = urllib.parse.quote(download_name)
+    return FileResponse(
+        tmp_path,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"},
+        background=BackgroundTask(os.remove, tmp_path),
+    )
 
 
 # ---------------------------------------------------------------------------

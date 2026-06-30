@@ -2,7 +2,7 @@
 
 > AI 照片管理 + 网页征稿协作系统
 
-[![Version](https://img.shields.io/badge/version-3.1.4-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-3.2.0-orange.svg)]()
 [![License](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)]()
 [![React](https://img.shields.io/badge/react-18+-61dafb.svg)]()

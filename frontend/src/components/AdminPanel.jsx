@@ -423,13 +423,18 @@ function Console({ fail, onDisconnect }) {
               <IntakeAddress book={current.code} base={serverBase} ossMode={ossMode} notify={notify} />
 
               <div className="seg seg-detail">
+                <button className={view === 'manage' ? 'active' : ''} onClick={() => setView('manage')}>照片管理</button>
                 <button className={view === 'board' ? 'active' : ''} onClick={() => setView('board')}>征稿看板</button>
                 <button className={view === 'codes' ? 'active' : ''} onClick={() => setView('codes')}>投稿码管理</button>
               </div>
 
-              {view === 'board'
-                ? <Board book={current.code} base={serverBase} fail={fail} notify={notify} />
-                : <Codes book={current.code} base={serverBase} fail={fail} notify={notify} onChanged={() => loadBooks(current.code)} />}
+              {view === 'manage'
+                ? <PhotoManage book={current.code} fail={fail} notify={notify} />
+                : view === 'board'
+                  ? <Board book={current.code} base={serverBase} fail={fail} notify={notify} />
+                  : <Codes book={current.code} base={serverBase} fail={fail} notify={notify}
+                      bookOpen={current.intake_open !== false} prefix={current.code_prefix || ''}
+                      onChanged={() => loadBooks(current.code)} />}
             </>
           )}
         </section>
@@ -534,6 +539,7 @@ function Board({ book, base, fail, notify }) {
   const [sort, setSort] = useState({ key: 'code', dir: 1 })
   const [auto, setAuto] = useState(false)
   const [open, setOpen] = useState(null)           // 展开下钻的投稿码
+  const [collections, setCollections] = useState([])   // 本书的相册（存片目标）
   const autoRef = useRef(null)
 
   const load = useCallback(async (silent) => {
@@ -548,8 +554,13 @@ function Board({ book, base, fail, notify }) {
     }
   }, [book, fail])
 
+  const loadCollections = useCallback(async () => {
+    try { setCollections((await api.intakeCollections(book)).collections || []) }
+    catch { /* 相册加载失败不阻塞看板 */ }
+  }, [book])
+
   // 切换书籍：重载并收起下钻
-  useEffect(() => { setOpen(null); load() }, [load])
+  useEffect(() => { setOpen(null); load(); loadCollections() }, [load, loadCollections])
 
   // 自动刷新（静默，不打断展开）
   useEffect(() => {
@@ -679,7 +690,10 @@ function Board({ book, base, fail, notify }) {
                 {isOpen && (
                   <tr className="row-detail">
                     <td colSpan={6}>
-                      <FileGrid code={r.code} name={r.name} fail={fail} />
+                      <FileGrid
+                        code={r.code} name={r.name} book={book} fail={fail} notify={notify}
+                        collections={collections} onCollectionsChanged={loadCollections}
+                      />
                     </td>
                   </tr>
                 )}
@@ -702,10 +716,12 @@ function FragmentRow({ children }) {
   return <>{children}</>
 }
 
-/* ── 下钻：某摄影师的照片缩略图墙（懒加载 + 点击放大）── */
-function FileGrid({ code, name, fail }) {
+/* ── 下钻：某摄影师的照片缩略图墙（懒加载 + 点击放大 + 多选存入文件夹）── */
+function FileGrid({ code, name, book, fail, notify, collections = [], onCollectionsChanged }) {
   const [state, setState] = useState({ loading: true, files: null })
   const [lightbox, setLightbox] = useState(null)   // 当前放大的 index
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState(() => new Set())
 
   useEffect(() => {
     let alive = true
@@ -720,16 +736,286 @@ function FileGrid({ code, name, fail }) {
   const files = state.files || []
   if (!files.length) return <div className="grid-empty">该摄影师暂无照片</div>
 
+  function toggle(id) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  function exitSelect() { setSelecting(false); setSelected(new Set()) }
+  function selectAll() { setSelected(new Set(files.map(f => f.id))) }
+
+  async function storeInto(cid, cname) {
+    try {
+      const r = await api.intakeCollectionAdd(cid, [...selected])
+      notify?.(`已存入「${cname}」${r.added} 张`)
+      onCollectionsChanged?.()
+      exitSelect()
+    } catch (e) { fail(e.message) }
+  }
+
   return (
     <>
-      <div className="file-grid">
-        {files.map((f, i) => (
-          <button key={f.id} className="thumb" onClick={() => setLightbox(i)} title={`${f.file_name}${f.label ? ' · ' + f.label : ''}`}>
-            <img src={api.intakeImageSrc(f.url)} alt={f.file_name} loading="lazy" />
-            {f.label && f.label !== '未命名' && <span className="thumb-label">{f.label}</span>}
-          </button>
-        ))}
+      <div className="grid-toolbar">
+        {!selecting ? (
+          <button className="abtn ghost sm" onClick={() => setSelecting(true)}>选择照片</button>
+        ) : (
+          <>
+            <span className="grid-sel-count">已选 {selected.size} / {files.length}</span>
+            <button className="abtn ghost sm" onClick={selectAll}>全选</button>
+            <StoreMenu
+              disabled={selected.size === 0}
+              collections={collections}
+              book={book}
+              fail={fail}
+              onStore={storeInto}
+              onCreated={onCollectionsChanged}
+            />
+            <button className="abtn ghost sm" onClick={exitSelect}>退出选择</button>
+          </>
+        )}
       </div>
+      <div className={`file-grid${selecting ? ' selecting' : ''}`}>
+        {files.map((f, i) => {
+          const isSel = selected.has(f.id)
+          return (
+            <button
+              key={f.id}
+              className={`thumb${isSel ? ' selected' : ''}`}
+              onClick={() => selecting ? toggle(f.id) : setLightbox(i)}
+              title={`${f.file_name}${f.label ? ' · ' + f.label : ''}`}
+            >
+              <img src={api.intakeImageSrc(f.thumb || f.url)} alt={f.file_name} loading="lazy" />
+              {f.label && f.label !== '未命名' && <span className="thumb-label">{f.label}</span>}
+              {selecting && <span className="thumb-check">{isSel ? '✓' : ''}</span>}
+            </button>
+          )
+        })}
+      </div>
+      {lightbox != null && (
+        <Lightbox
+          files={files}
+          index={lightbox}
+          name={name}
+          onClose={() => setLightbox(null)}
+          onNav={d => setLightbox(i => (i + d + files.length) % files.length)}
+        />
+      )}
+    </>
+  )
+}
+
+/* ── 「存入文件夹」下拉：选现有相册或新建 ── */
+function StoreMenu({ disabled, collections = [], book, fail, onStore, onCreated }) {
+  const dialog = useDialog()
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  async function newFolder() {
+    setOpen(false)
+    const nm = await dialog.prompt({ title: '新建文件夹', message: '给这个相册起个名字', confirmText: '创建并存入' })
+    if (!nm) return
+    try {
+      const c = await api.intakeCreateCollection(book, nm)
+      onCreated?.()
+      onStore(c.id, c.name)
+    } catch (e) { fail(e.message) }
+  }
+
+  return (
+    <span className="store-menu" ref={ref}>
+      <button className="abtn primary sm" disabled={disabled} onClick={() => setOpen(o => !o)}>
+        存入文件夹 ▾
+      </button>
+      {open && !disabled && (
+        <div className="store-dropdown">
+          {collections.length === 0 && <div className="store-empty">还没有文件夹</div>}
+          {collections.map(c => (
+            <button key={c.id} className="store-item" onClick={() => { setOpen(false); onStore(c.id, c.name) }}>
+              <span className="store-item-name">{c.name}</span>
+              <span className="store-item-count">{c.count}</span>
+            </button>
+          ))}
+          <button className="store-item store-new" onClick={newFolder}>＋ 新建文件夹</button>
+        </div>
+      )}
+    </span>
+  )
+}
+
+/* ── 照片管理：相册（文件夹）—— 左列文件夹、右侧照片墙 + 整包下载 ── */
+function PhotoManage({ book, fail, notify }) {
+  const dialog = useDialog()
+  const [cols, setCols] = useState(null)     // null=加载中
+  const [active, setActive] = useState(null) // 当前打开的相册 id
+
+  const load = useCallback(async () => {
+    try { setCols((await api.intakeCollections(book)).collections || []) }
+    catch (e) { setCols([]); fail(e.message) }
+  }, [book, fail])
+
+  useEffect(() => { setActive(null); load() }, [load])
+
+  async function newFolder() {
+    const nm = await dialog.prompt({ title: '新建文件夹', message: '给这个相册起个名字', confirmText: '创建' })
+    if (!nm) return
+    try {
+      const c = await api.intakeCreateCollection(book, nm)
+      await load()
+      setActive(c.id)
+      notify?.(`已新建「${c.name}」`)
+    } catch (e) { fail(e.message) }
+  }
+  async function rename(c) {
+    const nm = await dialog.prompt({ title: '重命名文件夹', defaultValue: c.name, confirmText: '保存' })
+    if (!nm || nm === c.name) return
+    try { await api.intakeRenameCollection(c.id, nm); await load() }
+    catch (e) { fail(e.message) }
+  }
+  async function remove(c) {
+    const ok = await dialog.confirm({
+      title: '删除文件夹', danger: true, confirmText: '删除',
+      message: `确定删除「${c.name}」？只移除这个相册，原投稿照片不受影响。`,
+    })
+    if (!ok) return
+    try {
+      await api.intakeDeleteCollection(c.id)
+      if (active === c.id) setActive(null)
+      await load()
+    } catch (e) { fail(e.message) }
+  }
+
+  if (cols === null) return <div className="admin-empty">加载中…</div>
+  const activeCol = cols.find(c => c.id === active)
+
+  return (
+    <div className="admin-body manage-body">
+      <div className="manage-split">
+        <aside className="folder-list">
+          <div className="folder-head">
+            <span>文件夹</span>
+            <button className="abtn primary sm" onClick={newFolder}>＋ 新建</button>
+          </div>
+          {cols.length === 0 && <div className="grid-empty">还没有文件夹。新建后，去「征稿看板」勾选照片存进来。</div>}
+          {cols.map(c => (
+            <div
+              key={c.id}
+              className={`folder-card${c.id === active ? ' active' : ''}`}
+              onClick={() => setActive(c.id)}
+            >
+              <div className="folder-card-main">
+                <span className="folder-name">{c.name}</span>
+                <span className="folder-meta">{c.count} 张 · {c.date}</span>
+              </div>
+              <div className="folder-actions" onClick={e => e.stopPropagation()}>
+                <button className="btn-link" onClick={() => rename(c)}>重命名</button>
+                <button className="btn-link del" onClick={() => remove(c)}>删除</button>
+              </div>
+            </div>
+          ))}
+        </aside>
+
+        <section className="folder-detail">
+          {!activeCol
+            ? <div className="admin-empty">{cols.length ? '从左侧选择一个文件夹' : '先新建一个文件夹'}</div>
+            : <FolderView
+                key={activeCol.id}
+                cid={activeCol.id}
+                name={activeCol.name}
+                fail={fail}
+                notify={notify}
+                onChanged={load}
+              />}
+        </section>
+      </div>
+    </div>
+  )
+}
+
+/* ── 相册内照片墙：移出 / 整包下载 / 放大 ── */
+function FolderView({ cid, name, fail, notify, onChanged }) {
+  const [state, setState] = useState({ loading: true, files: null })
+  const [selected, setSelected] = useState(() => new Set())
+  const [lightbox, setLightbox] = useState(null)
+  const [downloading, setDownloading] = useState(false)
+
+  const load = useCallback(async () => {
+    setState({ loading: true, files: null })
+    try {
+      const d = await api.intakeCollectionFiles(cid)
+      setState({ loading: false, files: d.files })
+    } catch (e) { setState({ loading: false, files: [] }); fail(e.message) }
+  }, [cid, fail])
+
+  useEffect(() => { setSelected(new Set()); load() }, [load])
+
+  function toggle(id) {
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+
+  async function removeSelected() {
+    try {
+      await api.intakeCollectionRemove(cid, [...selected])
+      notify?.(`已移出 ${selected.size} 张`)
+      setSelected(new Set())
+      await load(); onChanged?.()
+    } catch (e) { fail(e.message) }
+  }
+
+  async function download() {
+    setDownloading(true)
+    try {
+      await api.intakeDownloadCollection(cid, name)
+      notify?.('已开始下载 ZIP')
+    } catch (e) { fail(e.message) } finally { setDownloading(false) }
+  }
+
+  if (state.loading) return <div className="grid-empty">载入照片…</div>
+  const files = state.files || []
+
+  return (
+    <>
+      <div className="grid-toolbar">
+        <b className="folder-title">{name}</b>
+        <span className="muted">{files.length} 张</span>
+        <span className="form-spacer" />
+        {selected.size > 0 && (
+          <button className="abtn ghost sm" onClick={removeSelected}>移出所选 {selected.size}</button>
+        )}
+        <button className="abtn primary sm" onClick={download} disabled={downloading || files.length === 0}>
+          {downloading ? '打包中…' : '下载文件夹 (ZIP)'}
+        </button>
+      </div>
+      {files.length === 0
+        ? <div className="grid-empty">这个文件夹还没有照片。去「征稿看板」勾选照片存进来。</div>
+        : (
+          <div className="file-grid selecting">
+            {files.map((f, i) => {
+              const isSel = selected.has(f.id)
+              return (
+                <button
+                  key={f.id}
+                  className={`thumb${isSel ? ' selected' : ''}`}
+                  onClick={() => toggle(f.id)}
+                  onDoubleClick={() => setLightbox(i)}
+                  title={`${f.file_name}　（单击选择 · 双击放大）`}
+                >
+                  <img src={api.intakeImageSrc(f.thumb || f.url)} alt={f.file_name} loading="lazy" />
+                  {f.label && f.label !== '未命名' && <span className="thumb-label">{f.label}</span>}
+                  <span className="thumb-check">{isSel ? '✓' : ''}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
       {lightbox != null && (
         <Lightbox
           files={files}
@@ -788,7 +1074,7 @@ function Stat({ label, value, tone = '' }) {
 }
 
 /* ── 投稿码管理 ── */
-function Codes({ book, base, fail, notify, onChanged }) {
+function Codes({ book, base, fail, notify, bookOpen = true, prefix = '', onChanged }) {
   const dialog = useDialog()
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -853,6 +1139,20 @@ function Codes({ book, base, fail, notify, onChanged }) {
     } catch (err) { fail(err.message) }
   }
 
+  async function toggleIntake() {
+    const stopping = bookOpen
+    if (stopping && !(await dialog.confirm({
+      title: '停止本书征稿',
+      message: '停止后，摄影师将无法再用投稿码上传照片（已收到的照片不受影响）。可随时恢复。',
+      confirmText: '停止征稿', danger: true,
+    }))) return
+    try {
+      await api.intakeSetBookIntake(book, !bookOpen)
+      notify?.(stopping ? '已停止本书征稿' : '已恢复本书征稿')
+      onChanged?.()
+    } catch (err) { fail(err.message) }
+  }
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return data?.rows || []
@@ -862,6 +1162,19 @@ function Codes({ book, base, fail, notify, onChanged }) {
 
   return (
     <div className="admin-body">
+      <div className={`intake-status-bar${bookOpen ? '' : ' closed'}`}>
+        <span className="intake-state">
+          <span className={`dot ${bookOpen ? 'ok' : 'muted'}`} />
+          {bookOpen ? '征稿进行中' : '已停止征稿'}
+        </span>
+        {prefix && <span className="intake-prefix">投稿码前缀 <b className="mono">{prefix}</b>（自动生成 {prefix}01、{prefix}02…）</span>}
+        <span className="form-spacer" />
+        <button
+          className={`abtn sm ${bookOpen ? 'ghost' : 'primary'}`}
+          onClick={toggleIntake}
+        >{bookOpen ? '停止征稿' : '恢复征稿'}</button>
+      </div>
+
       <form className="admin-form" onSubmit={addOne}>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="姓名（必填）" />
         <input value={contact} onChange={e => setContact(e.target.value)} placeholder="联系方式（选填）" />
