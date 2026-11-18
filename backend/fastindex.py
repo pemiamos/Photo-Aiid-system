@@ -194,8 +194,23 @@ class SearchReq(BaseModel):
 
 @router.post("/search")
 async def search(req: SearchReq):
+    """语义搜索。中文查询会先经内置词典替换成英文关键词。
+
+    原因（实测）：CLIP ViT-B/32 的文本塔是英文训练的，纯中文查询与英文基准的
+    top10 重合只有 1%，中英混合 31%，**完全替换成英文 85%**。中文 token 留在
+    查询里会把英文淹掉（"猫 cat" 60%，"猫在草地上 cat grass" 只有 20%）。
+    """
+    from services import zh_lexicon
+
     t0 = time.time()
-    hits = await asyncio.to_thread(engine().search, req.query, req.k)
+    q = req.query
+    expanded, lex_hits, ratio = "", [], 0.0
+    if zh_lexicon.has_cjk(req.query):
+        expanded, lex_hits, ratio = zh_lexicon.expand(req.query)
+        if expanded:
+            q = expanded
+
+    hits = await asyncio.to_thread(engine().search, q, req.k)
     import sqlite3
     con = sqlite3.connect(engine().db_path)
     out = []
@@ -206,7 +221,12 @@ async def search(req: SearchReq):
                         "cat": r[0] if r else "", "conf": round((r[1] or 0), 3) if r else 0})
     finally:
         con.close()
-    return {"query": req.query, "ms": round((time.time() - t0) * 1000, 1), "items": out}
+    return {
+        "query": req.query, "used": q, "expanded": expanded,
+        "lexicon": [{"zh": a, "en": b} for a, b in lex_hits],
+        "hit_ratio": round(ratio, 2),
+        "ms": round((time.time() - t0) * 1000, 1), "items": out,
+    }
 
 
 @router.get("/similar")

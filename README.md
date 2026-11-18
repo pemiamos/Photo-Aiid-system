@@ -160,7 +160,8 @@ LLM 调用量降到约 1/4。纯 CPU 推理，不占显存、不装 torch、下�
 
 - **模型**：CLIP ViT-B/32（int8 ONNX，85MB）+ YuNet 人脸检测（227KB）
 - **速度**：约 200ms/张（465 张全库 93 秒）
-- **能力**：12 类粗分类（实测 87%）、以图搜图（10ms）、重复/近似图归组（92 组 / 36ms）
+- **能力**：12 类粗分类（实测 87%）、以图搜图（10ms）、重复/近似图归组（92 组 / 36ms）、
+  中文语义检索（内置词典转英文，实测 85% 命中率）
 
 ```bash
 pip install -r backend/requirements-fast.txt   # onnxruntime / opencv / tokenizers

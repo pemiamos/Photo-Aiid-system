@@ -451,7 +451,19 @@ async function renderSearch() {
   });
   state.loading = false;
   em.style.display = 'none';
-  $('hint').innerHTML = `语义搜索「<b>${esc(state.q)}</b>」 · <b>${d.ms}ms</b> · ${d.items.length} 条`;
+
+  // 中文查询会被词典替换成英文再检索（纯中文在 CLIP 文本塔里基本无效）
+  let head = `语义搜索「<b>${esc(d.query)}</b>」`;
+  if (d.expanded) {
+    const pairs = d.lexicon.slice(0, 6).map(x => `${x.zh}→${x.en}`).join(' · ');
+    head += ` → <b style="color:var(--green)">${esc(d.expanded)}</b>`
+          + `<span style="color:var(--faint)">（词典 ${d.lexicon.length} 词：${esc(pairs)}${d.lexicon.length > 6 ? ' …' : ''}）</span>`;
+  } else if (d.hit_ratio > 0) {
+    head += ` <span style="color:var(--red)">· 词典未覆盖（命中 ${Math.round(d.hit_ratio*100)}%），按原文检索，结果可能不准</span>`;
+  }
+  head += ` · ${d.ms}ms · ${d.items.length} 条`;
+  $('hint').innerHTML = head;
+
   g.innerHTML = d.items.map(it => cardHtml({...it, low: it.conf < 0.5, flag: ''})).join('');
   bindCards();
 }
