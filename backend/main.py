@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 
@@ -44,6 +44,17 @@ import database as db
 import intake
 from engines import get_engine, list_engines
 from services import scanner, analyzer, renamer
+
+# 本地视觉预分类（CLIP + 人脸检测）。依赖是可选的（onnxruntime / opencv /
+# tokenizers，约 60MB），缺失时整块功能跳过、其余接口照常工作——这样没装
+# 可选依赖的用户升级后不会因为 import 失败而起不来。
+try:
+    import fastindex
+    _FAST_INDEX_AVAILABLE = True
+except ImportError as _fast_err:
+    fastindex = None
+    _FAST_INDEX_AVAILABLE = False
+    _FAST_INDEX_IMPORT_ERROR = _fast_err
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -81,6 +92,30 @@ app.add_middleware(
 
 # 投稿征稿模块（网页上传页 + 凭证接口 + 看板）。必须在 "/" 静态兜底挂载之前注册。
 app.include_router(intake.router)
+
+# 本地视觉预分类：可选功能，依赖缺失时自动跳过（见文件顶部的软导入）。
+# 页面入口 /fast 挂在下面的路由表里。
+if _FAST_INDEX_AVAILABLE:
+    app.include_router(fastindex.router)
+    logger.info("本地视觉预分类已启用 → /api/fast/review")
+else:
+    logger.warning("本地视觉预分类未启用（缺可选依赖）: %s", _FAST_INDEX_IMPORT_ERROR)
+    logger.warning("如需启用: pip install -r requirements-fast.txt && "
+                   "python scripts/download-fast-models.py")
+
+
+@app.get("/fast", include_in_schema=False)
+async def fast_entry():
+    """页面入口：/fast → 预分类验收页。前端顶栏的「预分类」按钮指向这里。"""
+    if not _FAST_INDEX_AVAILABLE:
+        return HTMLResponse(
+            "<h2>本地视觉预分类未启用</h2>"
+            "<p>缺可选依赖。请在项目根目录执行：</p>"
+            "<pre>pip install -r backend/requirements-fast.txt\n"
+            "python scripts/download-fast-models.py</pre>",
+            status_code=503)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/api/fast/review")
 
 
 # ---------------------------------------------------------------------------

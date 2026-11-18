@@ -17,6 +17,9 @@ src-tauri/resources/
 # Database
 *.db
 
+# 本地视觉预分类的 ONNX 模型（约 148MB，不入库；用 scripts/download-fast-models.py 拉取）
+backend/models/
+
 # Thumbnails
 .thumbnails/
 

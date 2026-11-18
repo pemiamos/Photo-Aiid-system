@@ -17,6 +17,14 @@ from PyInstaller.utils.hooks import (
 
 HERE = os.path.abspath(os.getcwd())  # 约定从 backend/ 目录运行
 
+# ── 本地视觉预分类（可选）──────────────────────────────────────────────────
+# 模型不入 git（见 .gitignore 的 backend/models/），本地跑过
+# scripts/download-fast-models.py 才会存在。存在则随包带上（+148MB），
+# 不存在则整块排除——这样 CI 上没有模型时产物体积与原来一致。
+_models = os.path.join(HERE, "models")
+_fast_models = (os.path.isdir(_models)
+                and any(f.endswith(".onnx") for f in os.listdir(_models)))
+
 # ── 数据文件 ──────────────────────────────────────────────────────────────
 datas = []
 # reverse_geocoder 自带城市坐标 CSV，必须随包带上
@@ -27,11 +35,20 @@ _dist = os.path.join(HERE, "..", "frontend", "dist")
 if os.path.isdir(_dist):
     datas += [(_dist, "frontend_dist")]
 
+# 预分类模型 + 页面文件
+if _fast_models:
+    datas += [(_models, "models")]
+datas += [(os.path.join(HERE, "fast_review.html"), ".")]
+
 # ── 隐藏导入 ──────────────────────────────────────────────────────────────
 hiddenimports = []
 # uvicorn 的 loop/protocol/lifespan 实现是运行时动态加载的，需显式带上
 hiddenimports += collect_submodules("uvicorn")
 hiddenimports += ["aiosqlite", "exifread"]
+
+if _fast_models:
+    hiddenimports += ["onnxruntime", "cv2", "tokenizers"]
+    datas += collect_data_files("onnxruntime")
 
 # pillow-heif：HEIC/HEIF 解码。含编译扩展 _pillow_heif 与 libheif 动态库，
 # 必须显式收集，否则打包后 PIL 仍打不开 .heic。
@@ -56,6 +73,10 @@ excludes = [
     "pandas",
     "tests",
 ]
+
+# 没有模型时不打包预分类的依赖（保持 CI 产物体积不变）
+if not _fast_models:
+    excludes += ["onnxruntime", "cv2", "tokenizers", "huggingface_hub"]
 
 a = Analysis(
     ["run_server.py"],

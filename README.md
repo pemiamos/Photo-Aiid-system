@@ -153,6 +153,27 @@ Photo-Aiid-system/
 
 ---
 
+## 🧠 本地视觉预分类（可选）
+
+用**本地小模型**先给照片粗分类，只把拿不准的交给云端 LLM——万张库从「5 小时」压到「33 分钟」，
+LLM 调用量降到约 1/4。纯 CPU 推理，不占显存、不装 torch、下完模型即离线。
+
+- **模型**：CLIP ViT-B/32（int8 ONNX，85MB）+ YuNet 人脸检测（227KB）
+- **速度**：约 200ms/张（465 张全库 93 秒）
+- **能力**：12 类粗分类（实测 87%）、以图搜图（10ms）、重复/近似图归组（92 组 / 36ms）
+
+```bash
+pip install -r backend/requirements-fast.txt   # onnxruntime / opencv / tokenizers
+python scripts/download-fast-models.py         # 拉模型到 backend/models/（约 148MB，不入 git）
+```
+
+启动后在 App 顶栏点「AI 预分类」，或直接访问 http://localhost:8000/fast
+
+> 不装也能用：缺这些可选依赖时整块功能自动跳过，其余功能不受影响。
+> 完整说明（含能力边界、三个实现坑）见 [docs/本地视觉预分类.md](docs/本地视觉预分类.md)。
+
+---
+
 ## 🔧 AI 引擎配置
 
 | 引擎 | 类型 | 说明 |
