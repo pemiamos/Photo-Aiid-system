@@ -60,6 +60,20 @@ try:
 except Exception:
     pass
 
+# 本地视觉预分类的动态库（仅在有模型时）。
+#   onnxruntime：依赖 hooks-contrib 的 hook-onnxruntime.py；2024 年前的版本没有
+#     这个 hook，所以这里显式收一次，避免冻结版 import onnxruntime 报缺 dylib。
+#   cv2：官方 hook-cv2.py 里 collect_dynamic_libs("cv2") **只在 compat.is_win
+#     分支执行**。mac 的 opencv wheel 自带 70 个 .dylib（cv2/.dylibs/ 下有
+#     ffmpeg / x265 / openssl / gnutls 全套），不显式收就会在冻结版里报
+#     `Library not loaded: @rpath/libavcodec...`。
+if _fast_models:
+    for _pkg in ("onnxruntime", "cv2"):
+        try:
+            heif_binaries += collect_dynamic_libs(_pkg)
+        except Exception:
+            pass
+
 # ── 排除 ──────────────────────────────────────────────────────────────────
 # clip 引擎是可选的；torch/sentence_transformers 体积巨大且非必需，排除后
 # engines/__init__ 的 try/except 会自动跳过 CLIP，系统仍可用云端引擎。
