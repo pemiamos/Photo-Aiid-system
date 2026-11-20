@@ -22,8 +22,10 @@ from io import BytesIO
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
+
+import numpy as np
 
 import database as db
 from services import fastvec as fv
@@ -37,8 +39,24 @@ _engine: fv.FastVec | None = None
 _progress: dict = {
     "running": False, "total": 0, "done": 0, "errors": 0,
     "current": "", "started_at": 0.0, "elapsed": 0.0,
-    "ms_per_img": 0.0, "eta": None, "root": "",
+    "ms_per_img": 0.0, "eta": None, "root": "", "error": "",
+    "failed_files": [],
 }
+
+
+def probe_available() -> tuple[bool, str]:
+    """真实探测功能是否可用（main.py 的软导入只能发现 fastindex 本身导入失败，
+    而 onnxruntime / cv2 / tokenizers 都是函数内延迟导入，缺包时软导入看不到）。"""
+    try:
+        import onnxruntime  # noqa: F401
+        import cv2  # noqa: F401
+        import tokenizers  # noqa: F401
+    except ImportError as e:
+        return False, f"缺少可选依赖 {e.name}（pip install -r backend/requirements-fast.txt）"
+    if not fv.VISION_MODEL.exists() or not fv.TEXT_MODEL.exists():
+        return False, (f"模型缺失（{fv._MODEL_DIR}），"
+                       f"请运行 python scripts/download-fast-models.py")
+    return True, ""
 
 
 def engine() -> fv.FastVec:
@@ -66,32 +84,54 @@ def _collect(root: str, limit: int | None = None) -> list[str]:
 
 
 def _run_index(root: str, batch: int, limit: int | None, skip_indexed: bool):
-    """同步执行（跑在线程里），边跑边更新 _progress。"""
-    eng = engine()
-    eng.load()
-    paths = _collect(root, limit)
-    if skip_indexed:
-        done_paths, _ = eng.load_vecs()
-        known = set(done_paths)
-        paths = [p for p in paths if p not in known]
+    """同步执行（跑在线程里），边跑边更新 _progress。
 
+    整个函数体都包在 try/finally 里：早期版本把 engine()/load()/_collect 放在
+    try 外面，缺模型或缺 cv2 时异常直接逸出，running 永远停在 True，
+    之后所有请求都 409 直到重启。现在任何异常都会落进 _progress["error"]
+    并把 running 复位。
+    """
     _progress.update({
-        "running": True, "total": len(paths), "done": 0, "errors": 0,
+        "running": True, "total": 0, "done": 0, "errors": 0,
         "current": "", "started_at": time.time(), "elapsed": 0.0,
-        "ms_per_img": 0.0, "eta": None, "root": root, "load_ms": eng.load_ms,
+        "ms_per_img": 0.0, "eta": None, "root": root, "error": "",
+        "failed_files": [],
     })
-    chunk = max(batch, 8)
     try:
+        ok, why = probe_available()
+        if not ok:
+            raise RuntimeError(why)
+
+        eng = engine()
+        eng.load()
+        _progress["load_ms"] = eng.load_ms
+        paths = _collect(root, limit)
+        if skip_indexed:
+            done_paths, _ = eng.load_vecs()
+            known = set(done_paths)
+            paths = [p for p in paths if p not in known]
+
+        _progress["total"] = len(paths)
+        chunk = max(batch, 8)
         for i in range(0, len(paths), chunk):
             part = paths[i:i + chunk]
             _progress["current"] = os.path.basename(part[0])
             try:
                 # analyze_batch 内部只解码/编码各一次，直接拿回向量入库
                 items, vecs = eng.analyze_batch(part, batch=batch)
-                eng.store(items, vecs)
+                # 解码失败的单张不写库（否则多张坏图会得到同一个灰图向量，
+                # 被重复检测误报成同组）
+                good = [(it, v) for it, v in zip(items, vecs) if not it.error]
+                if good:
+                    eng.store([g[0] for g in good], np.stack([g[1] for g in good]))
+                bad = [it.path for it in items if it.error]
+                if bad:
+                    _progress["errors"] += len(bad)
+                    _progress["failed_files"].extend(bad[:50])
                 _progress["done"] += len(items)
             except Exception as e:
                 _progress["errors"] += len(part)
+                _progress["failed_files"].extend(part[:50])
                 print(f"[fastindex] chunk 失败 {part[0]}: {e}", flush=True)
 
             el = time.time() - _progress["started_at"]
@@ -100,6 +140,9 @@ def _run_index(root: str, batch: int, limit: int | None, skip_indexed: bool):
             _progress["ms_per_img"] = round(el / d * 1000, 1)
             left = _progress["total"] - _progress["done"]
             _progress["eta"] = round(el / d * left, 0) if left > 0 else 0
+    except Exception as e:
+        _progress["error"] = f"{type(e).__name__}: {e}"
+        print(f"[fastindex] 索引失败: {_progress['error']}", flush=True)
     finally:
         _progress["running"] = False
         _progress["current"] = ""
@@ -116,6 +159,9 @@ class IndexReq(BaseModel):
 async def start_index(req: IndexReq):
     if _progress["running"]:
         raise HTTPException(409, "索引任务正在进行中")
+    ok, why = probe_available()
+    if not ok:
+        raise HTTPException(503, why)
     root = req.root
     if not root:
         s = await db.get_settings()
@@ -123,7 +169,8 @@ async def start_index(req: IndexReq):
     root = (root or "").strip()
     if not root or not os.path.isdir(root):
         raise HTTPException(400, f"目录不存在: {root!r}（请先在画廊里选文件夹，或传 root）")
-    _progress.update({"running": True, "total": 0, "done": 0, "errors": 0, "root": root})
+    _progress.update({"running": True, "total": 0, "done": 0, "errors": 0,
+                      "root": root, "error": "", "failed_files": []})
     asyncio.create_task(asyncio.to_thread(_run_index, root, req.batch, req.limit, req.skip_indexed))
     return {"ok": True, "root": root}
 
@@ -137,11 +184,16 @@ async def progress():
 async def stats():
     st = engine().stats()
     st["progress"] = dict(_progress)
+    ok, why = probe_available()
+    st["available"] = ok
+    st["unavailable_reason"] = why
     st["models"] = {
         "vision": fv.VISION_MODEL.name, "text": fv.TEXT_MODEL.name,
         "face": fv.FACE_MODEL.name if fv.FACE_MODEL.exists() else None,
         "dir": str(fv._MODEL_DIR),
-        "present": fv.VISION_MODEL.exists() and fv.TEXT_MODEL.exists(),
+        # 真实探测：软导入只能发现 fastindex 自身导入失败，而 onnxruntime/cv2/
+        # tokenizers 都是函数内延迟导入，缺包时这里才能看出来
+        "present": ok,
     }
     st["thresholds"] = {
         "face_score_min": fv.FACE_SCORE_MIN, "face_area_min": fv.FACE_AREA_MIN,
@@ -360,7 +412,13 @@ async def submit_llm(req: SubmitReq):
         session_id = sess.lastrowid
         for p in req.paths:
             if p in known:
-                ids.append(known[p])
+                pid = known[p]
+                ids.append(pid)
+                # 已存在的记录也要重置成 queued：否则上一轮的 done/error 状态会
+                # 和"已提交复核"的标记不一致，常规 /api/analyze 批处理也不会再捡它
+                await conn.execute(
+                    "UPDATE photos SET scan_status='queued', error_message=NULL, updated_at=? "
+                    "WHERE id=?", (time.time(), pid))
                 continue
             st = _P(p).stat()
             rel = str(_P(p).relative_to(root)) if str(_P(p)).startswith(root) else _P(p).name
@@ -381,7 +439,21 @@ async def submit_llm(req: SubmitReq):
 
     if not ids:
         raise HTTPException(500, "无法建立照片记录")
-    asyncio.create_task(analyzer.analyze_batch(photo_ids=ids, engine_name=req.engine_name))
+
+    # analyze_batch 在 _batch_active 为 True 时**直接 return**，任务会静默消失，
+    # 而这里还会把照片标成 llm 并回报 queued 数量。所以必须原子占位：
+    # 占不到就 409 拒绝，占到了才用 _preacquired=True 启动（否则它会把自己
+    # 判成"重复请求"而立即返回）。
+    if not analyzer.try_acquire_batch():
+        raise HTTPException(409, "已有分析任务在进行中，请等它结束后再提交复核"
+                                "（现在提交会被静默丢弃）")
+    try:
+        asyncio.create_task(analyzer.analyze_batch(
+            photo_ids=ids, engine_name=req.engine_name, _preacquired=True))
+    except Exception as e:
+        analyzer.release_batch()
+        raise HTTPException(500, f"启动分析失败: {e}")
+
     engine().set_flag(req.paths, "llm")
     return {"ok": True, "queued": len(ids), "engine": req.engine_name or "settings默认"}
 

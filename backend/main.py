@@ -16,7 +16,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 
@@ -107,15 +107,24 @@ else:
 @app.get("/fast", include_in_schema=False)
 async def fast_entry():
     """页面入口：/fast → 预分类验收页。前端顶栏的「预分类」按钮指向这里。"""
-    if not _FAST_INDEX_AVAILABLE:
-        return HTMLResponse(
-            "<h2>本地视觉预分类未启用</h2>"
-            "<p>缺可选依赖。请在项目根目录执行：</p>"
-            "<pre>pip install -r backend/requirements-fast.txt\n"
-            "python scripts/download-fast-models.py</pre>",
-            status_code=503)
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse("/api/fast/review")
+    why = ""
+    if _FAST_INDEX_AVAILABLE:
+        # 软导入只保证 fastindex 本身能 import；onnxruntime/cv2/tokenizers 都是
+        # 函数内延迟导入，必须真实探测一次才知道功能到底能不能用。
+        ok, why = fastindex.probe_available()
+        if ok:
+            return RedirectResponse("/api/fast/review")
+    else:
+        why = f"{type(_FAST_INDEX_IMPORT_ERROR).__name__}: {_FAST_INDEX_IMPORT_ERROR}"
+    return HTMLResponse(
+        "<div style=\"font:14px/1.8 system-ui;padding:40px;color:#333;max-width:720px\">"
+        "<h2 style=\"margin:0 0 12px\">本地视觉预分类未启用</h2>"
+        f"<p style=\"color:#b8452f\">{why}</p>"
+        "<p>在项目根目录执行：</p>"
+        "<pre style=\"background:#f4f4f6;padding:14px;border-radius:8px\">"
+        "pip install -r backend/requirements-fast.txt\n"
+        "python scripts/download-fast-models.py</pre>"
+        "</div>", status_code=503)
 
 
 # ---------------------------------------------------------------------------

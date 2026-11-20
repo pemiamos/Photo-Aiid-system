@@ -452,6 +452,10 @@ async function renderSearch() {
   state.loading = false;
   em.style.display = 'none';
 
+  // 搜索结果必须同步进 state.items —— 否则 Ctrl+A 全选会从旧的 state.items 取路径，
+  // 界面勾的是搜索结果，提交的却是上一屏的照片（打重复标记 / 送 LLM 都会操作错对象）。
+  state.items = d.items;
+
   // 中文查询会被词典替换成英文再检索（纯中文在 CLIP 文本塔里基本无效）
   let head = `语义搜索「<b>${esc(d.query)}</b>」`;
   if (d.expanded) {
@@ -470,6 +474,11 @@ async function renderSearch() {
 
 async function renderDup() {
   const g = $('grid'), em = $('empty');
+  // 重复组视图不是照片卡片列表，清空 state.items 与选中，
+  // 避免 Ctrl+A 把上一屏的路径当成这一屏的内容
+  state.items = [];
+  clearSel();
+
   const d = await api('/duplicates?thr=0.96');
   state.dupGroups = d.groups;
   state.loading = false;
@@ -602,6 +611,10 @@ document.querySelectorAll('.side [data-view]').forEach(el => el.onclick = () => 
   state.view = el.dataset.view.toUpperCase ? el.dataset.view : el.dataset.view;
   state.cat = null; state.q = null;
   $('q').value = '';
+  // 视图切换必须清空选中：屏幕上换了一批照片，旧的选中项已不可见，
+  // 留着会让批量操作作用到看不见的路径上
+  clearSel();
+  state.items = [];
   syncNav(); render();
 });
 $('zoom').value = state.zoom;

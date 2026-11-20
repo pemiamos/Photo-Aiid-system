@@ -90,6 +90,7 @@ class Item:
     overridden: bool = False                        # 是否被人脸覆盖
     low_conf: bool = False                          # 是否建议送 LLM
     ms: float = 0.0
+    error: str = ""                                 # 解码失败原因；非空表示这张不该入库
 
     def as_dict(self) -> dict:
         return {
@@ -97,6 +98,7 @@ class Item:
             "top": self.top, "faces": self.faces,
             "face_ratio": round(self.face_ratio, 5), "face_score": round(self.face_score, 3),
             "overridden": self.overridden, "low_conf": self.low_conf, "ms": round(self.ms, 1),
+            "error": self.error,
         }
 
 
@@ -193,45 +195,15 @@ class FastVec:
         return E / np.maximum(np.linalg.norm(E, axis=1, keepdims=True), 1e-9)
 
     # ── 人脸 ────────────────────────────────────────────
-    def detect_face_img(self, pil_img) -> tuple[int, float, float]:
-        """在已解码的 PIL 图上检测人脸。避免为检测再读一次盘——解码是最大瓶颈。"""
-        if self._face is None:
+    def _face_from_bgr(self, bgr) -> tuple[int, float, float]:
+        """在 BGR ndarray 上检测人脸（YuNet 的实际入口）。"""
+        if self._face is None or bgr is None:
             return 0, 0.0, 0.0
         import cv2
-        import numpy as np
         try:
-            arr = np.asarray(pil_img)
-            if arr.ndim != 3:
-                return 0, 0.0, 0.0
-            bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
             h, w = bgr.shape[:2]
             s = 640 / max(h, w)
             if s < 0.98:
-                bgr = cv2.resize(bgr, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
-            h, w = bgr.shape[:2]
-            self._face.setInputSize((w, h))
-            _, det = self._face.detect(bgr)
-            if det is None or len(det) == 0:
-                return 0, 0.0, 0.0
-            areas = det[:, 2] * det[:, 3] / (w * h)
-            k = int(np.argmax(areas))
-            return len(det), float(areas[k]), float(det[k, 14])
-        except Exception:
-            return 0, 0.0, 0.0
-
-    def detect_face(self, path: str) -> tuple[int, float, float]:
-        """返回 (脸数, 最大脸面积比, 该脸置信度)。1/8 尺寸直读，只在只需人脸时用。"""
-        if self._face is None:
-            return 0, 0.0, 0.0
-        import cv2
-        import numpy as np
-        try:
-            bgr = cv2.imread(path, cv2.IMREAD_REDUCED_COLOR_8)
-            if bgr is None:
-                return 0, 0.0, 0.0
-            h, w = bgr.shape[:2]
-            s = 640 / max(h, w)
-            if s < 1:
                 bgr = cv2.resize(bgr, (int(w * s), int(h * s)))
             h, w = bgr.shape[:2]
             self._face.setInputSize((w, h))
@@ -244,27 +216,83 @@ class FastVec:
         except Exception:
             return 0, 0.0, 0.0
 
-    # ── 主流程 ──────────────────────────────────────────
-    def analyze(self, path: str) -> Item:
-        """单张：人脸检测 + CLIP 分类 + 融合。"""
+    def detect_face(self, path: str) -> tuple[int, float, float]:
+        """按路径检测（cv2 直读 1/8 尺寸，最快）。"""
+        import cv2
+        try:
+            bgr = cv2.imread(path, cv2.IMREAD_REDUCED_COLOR_8)
+        except Exception:
+            bgr = None
+        return self._face_from_bgr(bgr)
+
+    def detect_face_img(self, pil_img) -> tuple[int, float, float]:
+        """PIL 图兜底（HEIC 等 cv2 打不开的格式）。
+
+        ⚠ 实测：PIL 的 draft() 走 DCT 缩放，图像质量与 cv2.IMREAD_REDUCED 不同，
+        YuNet 在 PIL 解码图上检测率明显更低（同一张 06 号照片：cv2 得 1 张脸
+        score 0.903，PIL 缩放后 0 张脸）。所以能用 cv2 就别用这条路径。
+        """
+        if pil_img is None:
+            return 0, 0.0, 0.0
+        import cv2
+        import numpy as _np
+        try:
+            arr = _np.asarray(pil_img)
+            if arr.ndim != 3:
+                return 0, 0.0, 0.0
+            return self._face_from_bgr(cv2.cvtColor(arr, cv2.COLOR_RGB2BGR))
+        except Exception:
+            return 0, 0.0, 0.0
+
+    def _load_for_both(self, path: str):
+        """一次解码，同时供人脸与 CLIP。
+
+        返回 (bgr 或 None, PIL.Image 或 None, error)。
+        优先 cv2（人脸检测对它更敏感），cv2 打不开（HEIC/损坏）再退 PIL。
+        """
         import cv2
         from PIL import Image
 
-        t0 = time.time()
-        it = Item(path=path)
+        try:
+            bgr = cv2.imread(path, cv2.IMREAD_REDUCED_COLOR_8)
+        except Exception:
+            bgr = None
 
-        n, ratio, score = self.detect_face(path)
-        it.faces, it.face_ratio, it.face_score = n, ratio, score
+        if bgr is not None:
+            try:
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                return bgr, Image.fromarray(rgb), ""
+            except Exception as e:
+                return bgr, None, f"{type(e).__name__}: {e}"[:200]
 
+        # cv2 打不开：PIL 兜底（HEIC / 特殊编码）
         try:
             with Image.open(path) as im:
                 try:
-                    im.draft("RGB", (512, 512))
+                    im.draft("RGB", (1280, 1280))
                 except Exception:
                     pass
-                img = im.convert("RGB")
-        except Exception:
-            img = Image.new("RGB", (224, 224), (128, 128, 128))
+                return None, im.convert("RGB"), ""
+        except Exception as e:
+            return None, None, f"{type(e).__name__}: {e}"[:200]
+
+    # ── 主流程 ──────────────────────────────────────────
+    def analyze(self, path: str) -> Item:
+        """单张：人脸检测 + CLIP 分类 + 融合。"""
+        t0 = time.time()
+        it = Item(path=path)
+
+        bgr, img, err = self._load_for_both(path)
+        if img is None:
+            it.error = err or "decode failed"
+            it.ms = (time.time() - t0) * 1000
+            return it
+
+        if bgr is not None:
+            n, ratio, score = self._face_from_bgr(bgr)
+        else:
+            n, ratio, score = self.detect_face_img(img)
+        it.faces, it.face_ratio, it.face_score = n, ratio, score
 
         E = self.embed_images([img])
         S = (E @ self._text_emb.T)[0]
@@ -293,36 +321,52 @@ class FastVec:
     def analyze_batch(self, paths: list[str], batch: int = 16) -> tuple[list[Item], np.ndarray]:
         """批量：解码一次 → 人脸 + CLIP 共用同一张图。返回 (items, 向量矩阵)。
 
-        关键：只 decode 一次。此前 cv2.imread 给检测 + PIL.open 给 CLIP 各解一次，
-        24MP 的 JPEG 解码成本翻倍（实测 96ms/张 → 240ms/张）。
+        两条关键约束：
+        1. **只 decode 一次**。此前 cv2.imread 给检测 + PIL.open 给 CLIP 各解一次，
+           24MP 的 JPEG 解码成本翻倍（实测 96ms/张 → 240ms/张）。
+        2. **解码失败的单张不参与编码**。早期版本给失败图塞一张灰色占位图，结果
+           所有坏文件得到同一个向量，进库后被重复检测误报成"同一组"，还被算作
+           分类成功。现在写进 `item.error` 并把该行向量留零，调用方按 error 过滤。
         """
         from PIL import Image
         self.load()
-        items, imgs = [], []
-        for p in paths:
+        items: list[Item] = []
+        imgs: list = []
+        valid_idx: list[int] = []
+
+        for i, p in enumerate(paths):
             it = Item(path=p)
-            try:
-                with Image.open(p) as im:
-                    try:
-                        im.draft("RGB", (640, 640))   # 大图先按 DCT 尺度降采样解码
-                    except Exception:
-                        pass
-                    img = im.convert("RGB")
-            except Exception:
-                img = Image.new("RGB", (224, 224), (128, 128, 128))
-            imgs.append(img)
-            n, ratio, score = self.detect_face_img(img)
-            it.faces, it.face_ratio, it.face_score = n, ratio, score
             items.append(it)
+            bgr, img, err = self._load_for_both(p)
+            if img is None:
+                it.error = err or "decode failed"
+                continue
+            # 人脸用 cv2 解码的那份（YuNet 对 PIL 的 DCT 缩放图检测率明显更低）
+            if bgr is not None:
+                n, ratio, score = self._face_from_bgr(bgr)
+            else:
+                n, ratio, score = self.detect_face_img(img)
+            it.faces, it.face_ratio, it.face_score = n, ratio, score
+            imgs.append(img)
+            valid_idx.append(i)
+
+        if not imgs:
+            return items, np.zeros((len(paths), 512), np.float32)
 
         E = self.embed_images(imgs, batch=batch)
-        S = E @ self._text_emb.T
+        full = np.zeros((len(paths), E.shape[1]), np.float32)
+        for k, i in enumerate(valid_idx):
+            full[i] = E[k]
+
+        S = full @ self._text_emb.T
         lg = _LOGIT_SCALE * S
         P = np.exp(lg - lg.max(1, keepdims=True))
         P /= P.sum(1, keepdims=True)
         order = np.argsort(-S, axis=1)
 
         for i, it in enumerate(items):
+            if it.error:
+                continue                      # 失败项不写分类结果
             it.top = [{"cls": ZH[j], "sim": round(float(S[i, j]), 4), "p": round(float(P[i, j]), 3)}
                       for j in order[i][:3]]
             clip_top, clip_p = ZH[order[i][0]], float(P[i, order[i][0]])
@@ -333,7 +377,7 @@ class FastVec:
             else:
                 it.category, it.conf = clip_top, clip_p
             it.low_conf = it.conf < LOW_CONF
-        return items, E
+        return items, full
 
     # ── 向量库 ──────────────────────────────────────────
     def _init_db(self):
