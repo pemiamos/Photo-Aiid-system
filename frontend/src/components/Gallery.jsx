@@ -229,6 +229,18 @@ export default function Gallery() {
   const [batchLoc, setBatchLoc] = useState('')
   const [batchAddTags, setBatchAddTags] = useState('')
 
+  /* 缩略图大小：与「AI 预分类」页的预览滑块一致（140~360px），记忆到 localStorage。
+     实际宽度由 CSS 变量 --card-min 驱动（见 Gallery.css 的 .gallery-grid）。 */
+  const CARD_KEY = 'gallery_card_min'
+  const [cardMin, setCardMin] = useState(() => {
+    const v = Number(localStorage.getItem(CARD_KEY))
+    return v >= 140 && v <= 360 ? v : 220
+  })
+  useEffect(() => {
+    document.documentElement.style.setProperty('--card-min', cardMin + 'px')
+    try { localStorage.setItem(CARD_KEY, String(cardMin)) } catch { /* 隐私模式忽略 */ }
+  }, [cardMin])
+
   const toggleSelect = (id) => dispatch({ type: Actions.TOGGLE_SELECT, payload: id })
 
   // 单击缩略图放大查看（与征稿看板一致）：记录在过滤集合中的下标，支持左右切换。
@@ -472,6 +484,19 @@ export default function Gallery() {
               确认投稿 ({selectedIds.length})
             </button>
           )}
+          <span className="zoom-bar">
+            <span>预览</span>
+              <input
+                type="range"
+                min="140"
+                max="360"
+                step="10"
+                value={cardMin}
+                onChange={e => setCardMin(Number(e.target.value))}
+                title="调整缩略图大小（记忆到本地）"
+              />
+              <span className="zoom-val">{cardMin}</span>
+            </span>
         </div>
       )}
 

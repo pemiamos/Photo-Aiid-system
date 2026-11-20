@@ -45,7 +45,7 @@
   flex: 1;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r2);
   color: var(--text);
   padding: 9px 12px;
   font-size: 13px;
@@ -60,7 +60,7 @@
 
 .search-btn {
   white-space: nowrap;
-  border-radius: 8px;
+  border-radius: var(--r2);
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--amber);
@@ -86,7 +86,7 @@
 
 .progress-text {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin-bottom: 6px;
   display: flex;
@@ -105,7 +105,7 @@
   color: var(--text);
   padding: 2px 12px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--mono);
   cursor: pointer;
   transition: border-color .15s var(--ease), color .15s var(--ease);
@@ -139,7 +139,7 @@
   color: var(--faint);
   padding: 80px 0;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 2;
 }
 
@@ -151,10 +151,15 @@
   margin-bottom: 8px;
 }
 
-/* ── masonry gallery ── */
+/* ── gallery grid ──
+   原来是 `columns: 4 240px`（CSS 多列瀑布流）：卡片高度跟着原图比例走，
+   一张竖构图能占掉整列，行列对不齐、观感很乱。改成等高网格，
+   图片统一 4:3 裁切，卡片尺寸一致；--card-min 留给缩略图大小滑块用。 */
 .gallery-grid {
-  columns: 4 240px;
-  column-gap: 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--card-min, 220px), 1fr));
+  gap: 14px;
+  align-content: start;
 }
 
 /* 放大层左右翻页按钮固定到屏幕边缘（不随图片尺寸变动），
@@ -172,32 +177,35 @@
 .gallery-sentinel {
   padding: 18px 0 28px;
   text-align: center;
-  color: var(--muted, #888);
-  font-size: 12px;
+  color: var(--muted, var(--muted));
+  font-size: 13px;
   letter-spacing: .04em;
 }
 
 /* ── photo card ── */
 .photo-card {
-  break-inside: avoid;
-  margin-bottom: 14px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r2);
   overflow: hidden;
   position: relative;
   animation: fadeIn .3s var(--ease) both;
   cursor: pointer;
-  transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease),
+              transform .15s var(--ease);
+  display: flex;
+  flex-direction: column;
 }
 
 .photo-card:hover {
-  border-color: var(--amber);
+  border-color: var(--line-2);
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
 }
 
 .photo-card.selected {
   border-color: var(--amber);
-  box-shadow: 0 0 0 2px var(--amber) inset;
+  box-shadow: 0 0 0 1px var(--amber), var(--shadow);
 }
 
 /* selection checkmark badge */
@@ -227,7 +235,7 @@
 }
 
 .card-check.on {
-  color: #101114;
+  color: var(--bg-2);
   background: var(--amber);
   border-color: var(--amber);
 }
@@ -238,7 +246,7 @@
   align-items: center;
   gap: 10px;
   margin: 0 0 12px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -252,7 +260,7 @@
   color: var(--text);
   padding: 3px 10px;
   border-radius: 5px;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   transition: border-color .15s var(--ease), color .15s var(--ease);
 }
@@ -272,9 +280,9 @@
   justify-content: space-between;
   align-items: center;
   padding: 4px 8px;
-  background: #101114;
+  background: var(--bg-2);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--amber);
   letter-spacing: .08em;
   border-bottom: 1px solid #000;
@@ -304,7 +312,7 @@
   border: none;
   padding: 1px 4px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: .04em;
   color: var(--amber);
   cursor: pointer;
@@ -312,19 +320,25 @@
   white-space: nowrap;
 }
 .card-reveal:hover {
-  background: rgba(255, 176, 32, .14);
+  background: rgba(232, 168, 61, .14);
 }
 
 .card-img-wrap {
   position: relative;
   cursor: zoom-in;
+  /* 统一 4:3：一张 6000×4000 的横图和 4000×6000 的竖图占同样的格子，
+     网格才对得齐。原图不裁（点开大图看原比例），只在缩略图层面 cover。 */
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: var(--bg-2);
 }
 
 .card-img-wrap img {
   width: 100%;
+  height: 100%;
   display: block;
-  background: #000;
-  min-height: 60px;
+  object-fit: cover;
+  background: var(--bg-2);
   /* 让卡片的拖拽（复制原图）接管，禁用 img 自身的原生拖拽 */
   -webkit-user-drag: none;
   user-select: none;
@@ -340,7 +354,7 @@
   top: 8px;
   right: 8px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 4px;
   background: rgba(0, 0, 0, .65);
@@ -361,7 +375,7 @@
   justify-content: space-between;
   gap: 8px;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -391,7 +405,7 @@
 
 .card-newname {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--ok);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -400,7 +414,7 @@
 }
 
 .card-desc {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text);
   margin: 7px 0 6px;
   line-height: 1.5;
@@ -413,7 +427,7 @@
 }
 
 .card-tag {
-  font-size: 10px;
+  font-size: 11px;
   padding: 2px 7px;
   border-radius: 99px;
   background: var(--panel-2);
@@ -426,7 +440,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--amber);
   margin: 4px 0 6px;
 }
@@ -447,7 +461,7 @@
 /* 文件名正下方的尺寸 + 大小（始终显示，独立于分析状态） */
 .card-specs-line {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--faint);
   margin: 2px 0 6px;
 }
@@ -457,7 +471,7 @@
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
   margin-left: 6px;
   opacity: .55;
 }
@@ -468,7 +482,7 @@
 .card-editor label,
 .batch-editor .batch-title {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   margin: 6px 0 3px;
 }
@@ -478,11 +492,11 @@
 .batch-editor input {
   width: 100%;
   box-sizing: border-box;
-  background: var(--panel-2, #1a1b1e);
+  background: var(--panel-2, var(--panel));
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
   padding: 5px 7px;
   font-family: var(--sans);
   margin-bottom: 4px;
@@ -496,7 +510,7 @@
 }
 
 .ed-save, .ed-cancel {
-  font-size: 12px;
+  font-size: 13px;
   padding: 3px 12px;
   border-radius: 5px;
   cursor: pointer;
@@ -510,19 +524,19 @@
 .batch-editor {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r2);
   padding: 10px 12px;
   margin-bottom: 12px;
 }
 .batch-editor .batch-title {
   color: var(--amber);
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 0;
 }
 
 .card-exif {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--faint);
   margin-top: 7px;
   line-height: 1.6;
@@ -540,9 +554,52 @@
 .select-btn.submit-confirm {
   margin-left: auto;
   background: var(--amber);
-  color: #1a1408;
+  color: var(--on-amber);
   font-weight: 600;
   border-color: var(--amber);
 }
 .select-btn.submit-confirm:hover { filter: brightness(1.08); }
 .select-btn.submit-confirm:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+
+/* ── 缩略图大小滑块（与「AI 预分类」页的预览滑块同一套视觉）── */
+.zoom-bar {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding-left: var(--s3);
+  border-left: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.zoom-bar input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 110px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-2);
+  outline: none;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.zoom-bar input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--amber);
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--amber-dim);
+}
+
+.zoom-val {
+  font-family: var(--mono);
+  min-width: 30px;
+  text-align: right;
+  color: var(--muted);
+}

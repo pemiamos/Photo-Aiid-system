@@ -1,0 +1,17 @@
+# 本地视觉预分类 · 可选依赖
+#
+# 不装也能正常使用 Photo-Aiid-system 的全部原有功能——main.py 里对 fastindex
+# 做了软导入，缺这些包时只是「预分类」入口不出现。
+#
+# 安装：
+#     pip install -r requirements-fast.txt
+# 下载模型（约 148MB，不入 git）：
+#     python scripts/download-fast-models.py
+#
+# 为什么不用 torch：CLIP + 人脸检测走 ONNX Runtime 推理即可，
+# onnxruntime 15MB vs torch cu124 2.5GB，且本项目 CPU 上 200ms/张已经够用。
+onnxruntime>=1.16.0
+opencv-python-headless>=4.8.0
+tokenizers>=0.15.0
+huggingface_hub>=0.20.0
+numpy>=1.24.0

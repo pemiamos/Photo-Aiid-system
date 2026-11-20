@@ -38,6 +38,30 @@ analysis_progress: dict = {
 # the request rate against rate-limited cloud APIs.
 _batch_active = False
 
+
+def try_acquire_batch() -> bool:
+    """原子地占用批处理槽位，成功返回 True。
+
+    给「不能默默丢任务」的调用方用（例如 fastindex 的 /api/fast/submit-llm）：
+    它们必须先确认槽位可用再提交，否则 analyze_batch 内部会因为 _batch_active
+    为 True 而直接 return，任务静默消失、调用方却以为已经排上了。
+
+    抢到槽位后必须紧接着用 analyze_batch(..., _preacquired=True) 启动，
+    中间不要插入 await，否则别的请求会看到槽位被占而 409。
+    """
+    global _batch_active
+    if _batch_active:
+        return False
+    _batch_active = True
+    return True
+
+
+def release_batch() -> None:
+    """释放由 try_acquire_batch() 占用的槽位（启动失败时回滚）。"""
+    global _batch_active
+    _batch_active = False
+
+
 # Pause/resume control. Event is "set" while running, "clear" while paused.
 _pause_event = asyncio.Event()
 _pause_event.set()
@@ -280,19 +304,24 @@ async def analyze_batch(
     photo_ids: list[int] | None = None,
     engine_name: str | None = None,
     concurrency: int | None = None,
+    _preacquired: bool = False,
 ):
     """
     Analyze multiple photos concurrently.
     If photo_ids is None, analyze all photos with status 'queued' or 'error'.
+
+    _preacquired=True 表示调用方已经用 try_acquire_batch() 占好了槽位，
+    这里不要重复检查也不要再置位（否则会把自己判成"重复请求"而直接返回）。
     """
     global analysis_progress, _batch_active, _active_start, _active_accum
 
     # Reject overlapping batches. This runs synchronously before any await, so
     # two near-simultaneous requests cannot both pass this guard.
-    if _batch_active:
-        logger.warning("Analysis batch already active; ignoring duplicate request")
-        return
-    _batch_active = True
+    if not _preacquired:
+        if _batch_active:
+            logger.warning("Analysis batch already active; ignoring duplicate request")
+            return
+        _batch_active = True
     # Reset pause/cancel/timing state for the new batch.
     _pause_event.set()
     _cancel_event.clear()

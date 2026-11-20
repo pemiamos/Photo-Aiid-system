@@ -37,6 +37,16 @@ os.environ.setdefault("PHOTO_AIID_DB", str(_data / "photo_aiid.db"))
 os.environ.setdefault("PHOTO_AIID_THUMB_DIR", str(_data / "thumbnails"))
 os.environ.setdefault("PHOTO_AIID_DIST", str(_resource_dir() / "frontend_dist"))
 
+# 本地视觉预分类的模型：打包版随包（spec 里 datas 打进 _MEIPASS/models），
+# 源码模式就是 backend/models/。fastvec 的默认路径按 __file__ 推算，frozen
+# 之后 __file__ 落在 _internal 里不可靠，所以这里显式覆盖。
+_models = _resource_dir() / "models"
+if _models.is_dir() and any(_models.glob("*.onnx")):
+    os.environ.setdefault("PHOTO_AIID_MODELS", str(_models))
+
+# 预分类的向量库放用户目录（打包后 app 内部只读，写不进去）
+os.environ.setdefault("PHOTO_AIID_FASTVEC_DB", str(_data / "fastvec.db"))
+
 import uvicorn  # noqa: E402
 from main import app  # noqa: E402
 

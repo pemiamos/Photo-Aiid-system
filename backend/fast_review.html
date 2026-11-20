@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 预分类 · Photo-Aiid</title>
+<style>
+/* ═══════════════════════════════════════════════════════
+   设计令牌 — 本机规范：OPPO Sans 4.0 / MiSans，不用系统雅黑
+   ═══════════════════════════════════════════════════════ */
+:root{
+  --bg:#0d0f13; --bg-2:#0a0c10; --panel:#161a21; --panel-2:#1c2029;
+  --line:#242932; --line-2:#323846;
+  --text:#e9ecf2; --muted:#8b93a2; --faint:#59616f;
+  --amber:#e8a83d; --amber-dim:#b57d22;
+  --red:#d9614f; --green:#4fa87d; --blue:#5b8fd6; --purple:#9a7bd4; --cyan:#4aa8a0;
+  --r1:6px; --r2:10px; --r3:14px;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  --shadow:0 4px 20px rgba(0,0,0,.45);
+  --card-w:200px;
+  --header-h:52px;
+  --sidebar-w:280px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--text); overflow:hidden;
+  font-family:"OPPO Sans 4.0","MiSans","Noto Sans SC",-apple-system,"Segoe UI",sans-serif;
+  font-size:13.5px; line-height:1.55; -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:ui-monospace,"SF Mono",Consolas,monospace;font-variant-numeric:tabular-nums}
+button{font-family:inherit;font-size:13px;cursor:pointer;border:none;background:none;color:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#2b313c;border-radius:5px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:#3a4250}
+
+/* ── 布局 ────────────────────────────────────────────── */
+.app{display:flex;flex-direction:column;height:100vh}
+.topbar{
+  display:flex;align-items:center;gap:var(--s4);padding:0 20px;
+  height:var(--header-h);flex-shrink:0;background:var(--panel);
+  border-bottom:1px solid var(--line);z-index:30;
+}
+.brand{display:flex;align-items:baseline;gap:var(--s2);white-space:nowrap}
+.brand b{font-size:15px;font-weight:600;letter-spacing:.2px}
+.brand .ver{font-size:11px;color:var(--faint);padding:1px 6px;border:1px solid var(--line-2);
+  border-radius:4px;letter-spacing:.4px}
+.topbar .spacer{flex:1}
+.statline{display:flex;gap:var(--s4);font-size:12px;color:var(--muted);white-space:nowrap}
+.statline b{color:var(--text);font-weight:600}
+.statline .warn b{color:var(--red)}
+.statline .ok b{color:var(--green)}
+
+.body{display:flex;flex:1;min-height:0}
+
+/* ── 侧栏 ────────────────────────────────────────────── */
+.side{
+  width:var(--sidebar-w);flex-shrink:0;background:var(--bg-2);border-right:1px solid var(--line);
+  overflow-y:auto;padding:18px 16px;
+}
+.side h4{
+  font-size:12px;font-weight:600;color:var(--faint);
+  padding:0 0 var(--s2);
+}
+.navitem{
+  display:flex;align-items:center;gap:var(--s2);padding:7px 8px;
+  cursor:pointer;border-left:2px solid transparent;transition:background .1s;
+  font-size:13px;
+}
+.navitem:hover{background:var(--panel-2)}
+.navitem.on{background:rgba(232,168,61,.1);border-left-color:var(--amber);color:var(--amber);font-weight:600}
+.navitem .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.navitem .n{margin-left:auto;font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.navitem.on .n{color:var(--amber-dim)}
+.side .divider{height:1px;background:var(--line);margin:var(--s3) 0}
+
+/* ── 主区 ────────────────────────────────────────────── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.toolbar{
+  display:flex;align-items:center;gap:var(--s3);padding:12px 24px;
+  border-bottom:1px solid var(--line);background:var(--bg);flex-shrink:0;flex-wrap:wrap;
+}
+.searchbox{
+  display:flex;align-items:center;gap:var(--s2);flex:1;min-width:220px;max-width:440px;
+  background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r2);padding:0 var(--s3);
+  transition:border-color .15s;
+}
+.searchbox:focus-within{border-color:var(--amber)}
+.searchbox input{
+  flex:1;background:none;border:none;outline:none;color:var(--text);
+  font-family:inherit;font-size:13px;padding:8px 0;
+}
+.searchbox input::placeholder{color:var(--faint)}
+.btn{
+  display:inline-flex;align-items:center;gap:5px;padding:7px 13px;border-radius:var(--r1);
+  background:var(--panel-2);border:1px solid var(--line);color:var(--muted);
+  font-size:12.5px;font-weight:500;transition:all .12s;white-space:nowrap;
+}
+.btn:hover{border-color:var(--line-2);color:var(--text);background:#232833}
+.btn.on{background:var(--amber);border-color:var(--amber);color:#1a1206;font-weight:600}
+.btn.primary{background:var(--amber);border-color:var(--amber);color:#1a1206;font-weight:600}
+.btn.primary:hover{background:#f0b44e}
+.btn.danger{border-color:rgba(217,97,79,.4);color:var(--red)}
+.btn.danger:hover{background:rgba(217,97,79,.12);border-color:var(--red)}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn.sm{padding:4px 9px;font-size:11.5px}
+
+.zoombar{display:flex;align-items:center;gap:var(--s2);padding-left:var(--s3);
+  border-left:1px solid var(--line);color:var(--faint);font-size:11.5px}
+input[type=range]{
+  -webkit-appearance:none;appearance:none;width:110px;height:3px;border-radius:2px;
+  background:var(--line-2);outline:none;cursor:pointer;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+  background:var(--amber);border:2px solid var(--bg);box-shadow:0 0 0 1px var(--amber-dim);
+}
+
+.content{flex:1;overflow-y:auto;padding:20px 24px 90px;position:relative}
+.hint{font-size:12px;color:var(--faint);margin-bottom:var(--s3)}
+.hint b{color:var(--muted)}
+
+/* ── 网格 ────────────────────────────────────────────── */
+.grid{
+  display:grid;gap:var(--s3);
+  grid-template-columns:repeat(auto-fill,minmax(var(--card-w),1fr));
+}
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--r2);
+  overflow:hidden;cursor:pointer;position:relative;
+  transition:transform .12s,border-color .12s,box-shadow .12s;
+}
+.card:hover{transform:translateY(-2px);border-color:var(--line-2);box-shadow:var(--shadow)}
+.card.sel{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber),var(--shadow)}
+.card.lowconf .thumb::after{
+  content:"";position:absolute;inset:0;border:1.5px dashed rgba(217,97,79,.55);
+  border-radius:var(--r2) var(--r2) 0 0;pointer-events:none;
+}
+.thumb{position:relative;background:var(--bg-2);overflow:hidden}
+.thumb img{width:100%;display:block;aspect-ratio:4/3;object-fit:cover}
+.tag{
+  position:absolute;left:7px;top:7px;padding:2px 7px;border-radius:4px;
+  font-size:11px;font-weight:600;letter-spacing:.2px;
+  background:rgba(13,15,19,.86);color:var(--amber);backdrop-filter:blur(4px);
+}
+.tag.low{background:rgba(217,97,79,.92);color:#fff}
+.flagmark{
+  position:absolute;right:7px;top:7px;padding:2px 7px;border-radius:4px;
+  font-size:10.5px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;
+}
+.flagmark.ok{background:rgba(79,168,125,.92);color:#04120b}
+.flagmark.dup{background:rgba(154,123,212,.92);color:#0b0614}
+.flagmark.llm{background:rgba(91,143,214,.92);color:#030a14}
+.check{
+  position:absolute;left:7px;bottom:7px;width:18px;height:18px;border-radius:5px;
+  border:1.5px solid rgba(255,255,255,.5);background:rgba(13,15,19,.55);
+  display:flex;align-items:center;justify-content:center;font-size:11px;
+  color:transparent;transition:all .12s;
+}
+.card.sel .check{background:var(--amber);border-color:var(--amber);color:#1a1206;font-weight:700}
+.meta{padding:7px 9px;font-size:11.5px;color:var(--faint);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:5px}
+.meta .conf{font-weight:700;font-variant-numeric:tabular-nums}
+.meta .conf.hi{color:var(--green)}
+.meta .conf.mid{color:var(--amber)}
+.meta .conf.lo{color:var(--red)}
+.meta .nm{overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
+
+/* ── 重复组 ──────────────────────────────────────────── */
+.group{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--r3);
+  margin-bottom:var(--s4);overflow:hidden;
+}
+.group-h{
+  display:flex;align-items:center;gap:var(--s3);padding:11px var(--s4);
+  background:var(--panel-2);border-bottom:1px solid var(--line);flex-wrap:wrap;
+}
+.group-h .idx{
+  width:24px;height:24px;border-radius:6px;background:var(--amber);color:#1a1206;
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex-shrink:0;
+}
+.group-h .t{font-weight:600;font-size:13px}
+.group-h .sim{font-size:11.5px;color:var(--muted);font-family:ui-monospace,Consolas,monospace}
+.group-h .spacer{flex:1}
+.group-b{display:flex;gap:var(--s3);padding:var(--s3);overflow-x:auto}
+.gitem{width:150px;flex-shrink:0;cursor:pointer;border-radius:var(--r1);
+  border:1px solid transparent;transition:all .12s;overflow:hidden}
+.gitem:hover{border-color:var(--line-2)}
+.gitem.keep{border-color:var(--green);background:rgba(79,168,125,.08)}
+.gitem img{width:100%;aspect-ratio:1;object-fit:cover;display:block;border-radius:var(--r1)}
+.gitem .p{font-size:10.5px;color:var(--faint);padding:4px 2px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
+.gitem .d{font-size:10px;color:var(--cyan);padding:0 2px 4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.keepbadge{font-size:10px;background:var(--green);color:#04120b;padding:1px 5px;
+  border-radius:3px;font-weight:700;margin-left:auto}
+
+/* ── 浮动操作条 ──────────────────────────────────────── */
+.actionbar{
+  position:fixed;left:50%;bottom:24px;transform:translate(-50%,120%);
+  display:flex;align-items:center;gap:var(--s2);padding:9px 10px 9px var(--s4);
+  background:rgba(28,32,41,.97);border:1px solid var(--line-2);border-radius:var(--r3);
+  box-shadow:0 10px 40px rgba(0,0,0,.6);z-index:60;backdrop-filter:blur(12px);
+  transition:transform .22s cubic-bezier(.2,.9,.3,1);
+}
+.actionbar.on{transform:translate(-50%,0)}
+.actionbar .cnt{font-size:12.5px;color:var(--muted);margin-right:var(--s2);white-space:nowrap}
+.actionbar .cnt b{color:var(--amber);font-weight:700;font-size:14px}
+
+/* ── 弹层 ────────────────────────────────────────────── */
+.lb{
+  position:fixed;inset:0;background:rgba(6,7,10,.97);z-index:100;
+  display:none;padding:var(--s5);gap:var(--s5);
+}
+.lb.on{display:flex}
+.lb .stage{flex:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:var(--s3);min-width:0}
+.lb .stage img{max-width:100%;max-height:76vh;object-fit:contain;border-radius:var(--r2);
+  box-shadow:0 20px 60px rgba(0,0,0,.7)}
+.lb .info{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--muted);
+  text-align:center;max-width:860px;line-height:1.8;word-break:break-all}
+.lb .info b{color:var(--amber);font-weight:600}
+.lb .info .kv{color:var(--text)}
+.lb .close{position:absolute;right:var(--s5);top:var(--s4);font-size:22px;
+  color:var(--muted);width:36px;height:36px;border-radius:50%;display:flex;
+  align-items:center;justify-content:center}
+.lb .close:hover{background:var(--panel-2);color:var(--text)}
+.lb .side{width:290px;flex-shrink:0;overflow-y:auto;border-left:1px solid var(--line);
+  padding-left:var(--s4)}
+.lb .side h5{font-size:11px;color:var(--faint);letter-spacing:.8px;
+  text-transform:uppercase;margin-bottom:var(--s3);font-weight:600}
+.simrow{display:flex;gap:var(--s2);align-items:center;padding:6px;border-radius:var(--r1);
+  cursor:pointer;transition:background .1s}
+.simrow:hover{background:var(--panel-2)}
+.simrow img{width:56px;height:42px;object-fit:cover;border-radius:4px;flex-shrink:0}
+.simrow .tx{min-width:0;font-size:11px;color:var(--faint);line-height:1.4;
+  font-family:ui-monospace,Consolas,monospace}
+.simrow .tx b{display:block;color:var(--text);font-weight:500;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;font-family:inherit}
+.simrow .sc{color:var(--green);font-weight:600}
+
+/* ── 空态 / 加载 ─────────────────────────────────────── */
+.empty{text-align:center;color:var(--faint);padding:80px 20px;line-height:2}
+.empty b{color:var(--text);font-size:15px;display:block;margin-bottom:var(--s2)}
+.progress{height:2px;background:var(--line);overflow:hidden;position:relative}
+.progress i{position:absolute;left:0;top:0;bottom:0;background:var(--amber);
+  transition:width .3s;width:0}
+.toast{
+  position:fixed;left:50%;top:72px;transform:translate(-50%,-20px);
+  background:var(--panel-2);border:1px solid var(--line-2);border-radius:var(--r2);
+  padding:10px 18px;font-size:13px;box-shadow:var(--shadow);z-index:200;
+  opacity:0;transition:all .22s;pointer-events:none;
+}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.toast.err{border-color:rgba(217,97,79,.5);color:var(--red)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand"><b>AI 预分类</b><span class="ver">Photo-Aiid · local</span></div>
+    <div class="spacer"></div>
+    <div class="statline" id="statline">
+      <span>索引 <b id="sTotal">0</b></span>
+      <span class="warn">低置信 <b id="sLow">0</b></span>
+      <span class="ok">已确认 <b id="sOk">0</b></span>
+      <span>重复 <b id="sDup">0</b></span>
+    </div>
+  </div>
+  <div class="progress"><i id="pbar"></i></div>
+
+  <div class="body">
+    <aside class="side">
+      <h4>视图</h4>
+      <div class="navitem on" data-view="grid"><span class="dot" style="background:var(--amber)"></span>全部分类</div>
+      <div class="navitem" data-view="low"><span class="dot" style="background:var(--red)"></span>待人工复核<span class="n" id="nLow">0</span></div>
+      <div class="navitem" data-view="dup"><span class="dot" style="background:var(--purple)"></span>重复 / 近似<span class="n" id="nDup">0</span></div>
+      <div class="navitem" data-view="ok"><span class="dot" style="background:var(--green)"></span>已确认<span class="n" id="nOk">0</span></div>
+      <div class="navitem" data-view="llm"><span class="dot" style="background:var(--blue)"></span>已提交 LLM<span class="n" id="nLlm">0</span></div>
+      <div class="divider"></div>
+      <h4>类别</h4>
+      <div id="catNav"></div>
+    </aside>
+
+    <main class="main">
+      <div class="toolbar">
+        <div class="searchbox">
+          <span style="color:var(--faint)">⌕</span>
+          <input id="q" type="text" placeholder="语义搜索（CLIP 开放式检索较弱，建议用「以图搜图」）">
+        </div>
+        <button class="btn" id="btnSearch">搜索</button>
+        <button class="btn" id="btnReset">重置</button>
+        <div class="zoombar">
+          <span>预览</span>
+          <input type="range" id="zoom" min="140" max="440" step="10" value="200">
+          <span class="mono" id="zoomVal">200</span>
+        </div>
+      </div>
+      <div class="content">
+        <div class="hint" id="hint"></div>
+        <div class="grid" id="grid"></div>
+        <div class="empty" id="empty" style="display:none"></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<div class="actionbar" id="actionbar">
+  <span class="cnt">已选 <b id="selCount">0</b> 张</span>
+  <button class="btn sm" onclick="batchFlag('ok')">✓ 确认无误</button>
+  <button class="btn sm" onclick="batchFlag('dup')">⊘ 标为重复</button>
+  <button class="btn sm primary" onclick="batchLLM()">⇪ 提交 LLM 复核</button>
+  <button class="btn sm" onclick="batchFlag('')">清除标记</button>
+  <button class="btn sm" onclick="clearSel()">取消</button>
+</div>
+
+<div class="lb" id="lb">
+  <button class="close" onclick="document.getElementById('lb').classList.remove('on')">×</button>
+  <div class="stage">
+    <img id="lbimg" src="" alt="">
+    <div class="info" id="lbinfo"></div>
+  </div>
+  <div class="side" id="lbside"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/api/fast';
+const $ = id => document.getElementById(id);
+
+const state = {
+  view: 'grid', cat: null, q: null,
+  items: [], sel: new Set(),
+  zoom: +(localStorage.getItem('fast_zoom') || 200),
+  dupGroups: null, loading: false,
+};
+
+const CAT_COLOR = {
+  '人像':'var(--amber)','自然风光':'var(--green)','鸟类':'var(--cyan)',
+  '哺乳动物':'var(--blue)','昆虫':'var(--purple)','花卉植物':'#c96fa8',
+  '美食':'#d99a4f','建筑':'#7f93b8','街景':'#8f8f9c',
+  '水面':'#5aa8c9','交通工具':'#9c8f5e','文档截图':'#8a8a8a',
+};
+
+async function api(path, opt) {
+  const r = await fetch(API + path, opt);
+  if (!r.ok) throw new Error((await r.text()).slice(0, 300));
+  return r.json();
+}
+function toast(msg, err) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.toggle('err', !!err);
+  t.classList.add('on');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove('on'), 2600);
+}
+const esc = s => (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const confCls = c => c >= 0.75 ? 'hi' : c >= 0.5 ? 'mid' : 'lo';
+const thumbUrl = (p, s) => `${API}/thumb?path=${encodeURIComponent(p)}&size=${s}`;
+
+/* ── 顶栏 / 侧栏统计 ─────────────────────────────────── */
+async function loadStats() {
+  const s = await api('/stats');
+  $('sTotal').textContent = s.total;
+  $('sLow').textContent = s.low_conf;
+  const fc = s.flag_counts || {};
+  $('sOk').textContent = fc['ok'] || 0;
+  $('sDup').textContent = fc['dup'] || 0;
+  $('nLow').textContent = s.low_conf;
+  $('nOk').textContent = fc['ok'] || 0;
+  $('nLlm').textContent = fc['llm'] || 0;
+
+  const nav = $('catNav');
+  nav.innerHTML = s.categories.map(c => `
+    <div class="navitem" data-cat="${esc(c.cat)}">
+      <span class="dot" style="background:${CAT_COLOR[c.cat] || 'var(--faint)'}"></span>
+      ${esc(c.cat)}<span class="n">${c.n}</span>
+    </div>`).join('');
+  nav.querySelectorAll('[data-cat]').forEach(el => el.onclick = () => {
+    state.cat = state.cat === el.dataset.cat ? null : el.dataset.cat;
+    state.view = 'grid';
+    syncNav(); render();
+  });
+  return s;
+}
+function syncNav() {
+  document.querySelectorAll('.side [data-view], .side [data-cat]').forEach(el => {
+    const on = el.dataset.view ? (state.view === el.dataset.view && !state.cat && !state.q)
+                               : (state.cat === el.dataset.cat);
+    el.classList.toggle('on', on);
+  });
+}
+
+/* ── 渲染 ────────────────────────────────────────────── */
+function cardHtml(it) {
+  const sel = state.sel.has(it.path);
+  const fm = it.flag ? `<span class="flagmark ${it.flag}">${
+    {ok:'已确认', dup:'重复', llm:'LLM'}[it.flag] || it.flag}</span>` : '';
+  return `
+  <div class="card ${sel?'sel':''} ${it.low?'lowconf':''}" data-path="${esc(it.path)}">
+    <div class="thumb">
+      <img loading="lazy" src="${thumbUrl(it.path, 400)}" alt="">
+      <span class="tag ${it.low?'low':''}">${esc(it.cat)}</span>
+      ${fm}
+      <span class="check">✓</span>
+    </div>
+    <div class="meta">
+      <span class="conf ${confCls(it.conf)}">${it.conf.toFixed(2)}</span>
+      <span class="nm">${esc(it.name)}</span>
+    </div>
+  </div>`;
+}
+
+async function render() {
+  const g = $('grid'), em = $('empty');
+  state.loading = true;
+
+  if (state.view === 'dup') return renderDup();
+  if (state.q) return renderSearch();
+
+  const p = new URLSearchParams({ limit: 3000 });
+  if (state.cat) p.set('cat', state.cat);
+  if (state.view === 'low') p.set('low', '1');
+  if (['ok','dup','llm'].includes(state.view)) p.set('flag', state.view);
+
+  const d = await api('/items?' + p);
+  state.items = d.items;
+  state.loading = false;
+
+  if (!d.items.length) {
+    g.innerHTML = '';
+    em.style.display = 'block';
+    em.innerHTML = `<b>没有符合条件的照片</b>换个筛选条件，或先建索引`;
+    $('hint').textContent = '';
+    return;
+  }
+  em.style.display = 'none';
+  $('hint').innerHTML = `显示 <b>${d.items.length}</b> / ${d.total} 张`
+    + (state.cat ? ` · 类别 <b>${esc(state.cat)}</b>` : '')
+    + ` · 点击卡片选择，点击名称看大图`;
+  g.innerHTML = d.items.map(cardHtml).join('');
+  bindCards();
+}
+
+async function renderSearch() {
+  const g = $('grid'), em = $('empty');
+  const d = await api('/search', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ query: state.q, k: 200 }),
+  });
+  state.loading = false;
+  em.style.display = 'none';
+
+  // 搜索结果必须同步进 state.items —— 否则 Ctrl+A 全选会从旧的 state.items 取路径，
+  // 界面勾的是搜索结果，提交的却是上一屏的照片（打重复标记 / 送 LLM 都会操作错对象）。
+  state.items = d.items;
+
+  // 中文查询会被词典替换成英文再检索（纯中文在 CLIP 文本塔里基本无效）
+  let head = `语义搜索「<b>${esc(d.query)}</b>」`;
+  if (d.expanded) {
+    const pairs = d.lexicon.slice(0, 6).map(x => `${x.zh}→${x.en}`).join(' · ');
+    head += ` → <b style="color:var(--green)">${esc(d.expanded)}</b>`
+          + `<span style="color:var(--faint)">（词典 ${d.lexicon.length} 词：${esc(pairs)}${d.lexicon.length > 6 ? ' …' : ''}）</span>`;
+  } else if (d.hit_ratio > 0) {
+    head += ` <span style="color:var(--red)">· 词典未覆盖（命中 ${Math.round(d.hit_ratio*100)}%），按原文检索，结果可能不准</span>`;
+  }
+  head += ` · ${d.ms}ms · ${d.items.length} 条`;
+  $('hint').innerHTML = head;
+
+  g.innerHTML = d.items.map(it => cardHtml({...it, low: it.conf < 0.5, flag: ''})).join('');
+  bindCards();
+}
+
+async function renderDup() {
+  const g = $('grid'), em = $('empty');
+  // 重复组视图不是照片卡片列表，清空 state.items 与选中，
+  // 避免 Ctrl+A 把上一屏的路径当成这一屏的内容
+  state.items = [];
+  clearSel();
+
+  const d = await api('/duplicates?thr=0.96');
+  state.dupGroups = d.groups;
+  state.loading = false;
+  $('nDup').textContent = d.groups.length;
+
+  if (!d.groups.length) {
+    g.innerHTML = ''; em.style.display = 'block';
+    em.innerHTML = `<b>没有发现重复图</b>${d.scanned} 张已扫描，阈值 0.96，耗时 ${d.ms}ms`;
+    $('hint').textContent = '';
+    return;
+  }
+  em.style.display = 'none';
+  $('hint').innerHTML = `发现 <b>${d.groups.length}</b> 组重复，冗余 <b>${d.redundant}</b> 张`
+    + ` · 扫描 ${d.scanned} 张 / ${d.ms}ms · 每组默认保留第一张`;
+  g.style.display = 'block';
+  g.innerHTML = d.groups.map((grp, i) => `
+    <div class="group">
+      <div class="group-h">
+        <span class="idx">${i+1}</span>
+        <span class="t">${grp.size} 张重复</span>
+        <span class="sim">min ${grp.min_score.toFixed(3)}</span>
+        <span class="spacer"></span>
+        <button class="btn sm danger" data-keepgroup="${i}">保留第一张，其余标重复</button>
+      </div>
+      <div class="group-b">
+        ${grp.files.map((f, j) => `
+          <div class="gitem ${j===0?'keep':''}" data-p="${esc(f.path)}">
+            <img loading="lazy" src="${thumbUrl(f.path, 300)}" alt="">
+            <div class="p">${esc(f.name)}${j===0?'<span class="keepbadge">保留</span>':''}</div>
+            <div class="d">${esc(f.dir)}</div>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+
+  g.querySelectorAll('.gitem').forEach(el => el.onclick = () => {
+    const f = d.groups.flatMap(x => x.files).find(x => x.path === el.dataset.p);
+    showBig(el.dataset.p, f ? f.name : '');
+  });
+  g.querySelectorAll('[data-keepgroup]').forEach(btn => btn.onclick = async e => {
+    e.stopPropagation();
+    const grp = d.groups[+btn.dataset.keepgroup];
+    const rest = grp.files.slice(1).map(f => f.path);
+    if (!rest.length) return;
+    await api('/flag', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ paths: rest, flag: 'dup', note: '重复组保留 ' + grp.files[0].name })});
+    toast(`已标记 ${rest.length} 张为重复`);
+    loadStats(); renderDup();
+  });
+  $('grid').style.display = 'block';
+}
+
+/* ── 卡片交互 ────────────────────────────────────────── */
+function bindCards() {
+  const g = $('grid');
+  g.style.display = '';
+  g.querySelectorAll('.card').forEach(el => {
+    const path = el.dataset.path;
+    el.onclick = e => {
+      if (e.altKey || e.ctrlKey || e.metaKey) return showBig(path, '');
+      if (state.sel.has(path)) state.sel.delete(path); else state.sel.add(path);
+      el.classList.toggle('sel', state.sel.has(path));
+      updateActionbar();
+    };
+    el.ondblclick = () => showBig(path, '');
+  });
+  g.querySelectorAll('.meta .nm').forEach(nm => {
+    nm.onclick = e => {
+      e.stopPropagation();
+      const card = nm.closest('.card');
+      showBig(card.dataset.path, nm.textContent);
+    };
+  });
+}
+function updateActionbar() {
+  const n = state.sel.size;
+  $('selCount').textContent = n;
+  $('actionbar').classList.toggle('on', n > 0);
+}
+function clearSel() {
+  state.sel.clear();
+  document.querySelectorAll('.card.sel').forEach(e => e.classList.remove('sel'));
+  updateActionbar();
+}
+
+/* ── 批量操作 ────────────────────────────────────────── */
+async function batchFlag(flag) {
+  const paths = [...state.sel];
+  if (!paths.length) return;
+  await api('/flag', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ paths, flag }) });
+  toast(flag ? `已标记 ${paths.length} 张为「${{ok:'已确认',dup:'重复'}[flag]}」` : `已清除 ${paths.length} 张标记`);
+  clearSel(); loadStats(); render();
+}
+async function batchLLM() {
+  const paths = [...state.sel];
+  if (!paths.length) return;
+  try {
+    const d = await api('/submit-llm', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ paths }) });
+    toast(`已提交 ${d.queued} 张到 LLM（引擎：${d.engine}）`);
+    clearSel(); loadStats(); render();
+  } catch (e) { toast('提交失败：' + e.message, true); }
+}
+
+/* ── 大图 + 相似图 ───────────────────────────────────── */
+async function showBig(path, name) {
+  $('lbimg').src = thumbUrl(path, 1800);
+  $('lbinfo').innerHTML = `<b>${esc(name || path.split(/[\\/]/).pop())}</b><br>${esc(path)}`;
+  $('lbside').innerHTML = '<h5>相似图 · 计算中</h5>';
+  $('lb').classList.add('on');
+  try {
+    const d = await api('/similar?k=16&path=' + encodeURIComponent(path));
+    $('lbside').innerHTML = `<h5>相似图 ${d.items.length} 张 · ${d.ms}ms</h5>`
+      + d.items.map(it => `
+        <div class="simrow" data-p="${esc(it.path)}">
+          <img loading="lazy" src="${thumbUrl(it.path, 120)}" alt="">
+          <div class="tx"><b>${esc(it.name)}</b><span class="sc">${it.score.toFixed(3)}</span> · ${esc(it.cat)}</div>
+        </div>`).join('');
+    $('lbside').querySelectorAll('.simrow').forEach(el => el.onclick = () => {
+      const p = el.dataset.p;
+      showBig(p, p.split(/[\\/]/).pop());
+    });
+  } catch (e) {
+    $('lbside').innerHTML = '<h5>相似图加载失败</h5>' + esc(e.message);
+  }
+}
+
+/* ── 事件绑定 ────────────────────────────────────────── */
+document.querySelectorAll('.side [data-view]').forEach(el => el.onclick = () => {
+  state.view = el.dataset.view.toUpperCase ? el.dataset.view : el.dataset.view;
+  state.cat = null; state.q = null;
+  $('q').value = '';
+  // 视图切换必须清空选中：屏幕上换了一批照片，旧的选中项已不可见，
+  // 留着会让批量操作作用到看不见的路径上
+  clearSel();
+  state.items = [];
+  syncNav(); render();
+});
+$('zoom').value = state.zoom;
+$('zoomVal').textContent = state.zoom;
+document.documentElement.style.setProperty('--card-w', state.zoom + 'px');
+$('zoom').oninput = e => {
+  state.zoom = +e.target.value;
+  $('zoomVal').textContent = state.zoom;
+  document.documentElement.style.setProperty('--card-w', state.zoom + 'px');
+  localStorage.setItem('fast_zoom', state.zoom);
+};
+$('btnSearch').onclick = () => {
+  const q = $('q').value.trim();
+  if (!q) return;
+  state.q = q; state.cat = null; state.view = 'grid';
+  syncNav(); render();
+};
+$('q').onkeydown = e => { if (e.key === 'Enter') $('btnSearch').click(); };
+$('btnReset').onclick = () => {
+  state.view = 'grid'; state.cat = null; state.q = null;
+  $('q').value = '';
+  syncNav(); render();
+};
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { $('lb').classList.remove('on'); clearSel(); }
+  if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    state.items.forEach(it => state.sel.add(it.path));
+    document.querySelectorAll('.card').forEach(c => c.classList.add('sel'));
+    updateActionbar();
+  }
+});
+
+/* ── 启动 ────────────────────────────────────────────── */
+(async function init() {
+  try {
+    const s = await loadStats();
+    if (!s.total) {
+      $('empty').style.display = 'block';
+      $('empty').innerHTML = `<b>还没有索引</b>点击下方按钮对当前文件夹建立向量索引
+        <br><br><button class="btn primary" onclick="startIndex()">开始建索引</button>`;
+      return;
+    }
+    syncNav(); render();
+  } catch (e) {
+    $('empty').style.display = 'block';
+    $('empty').innerHTML = `<b>后端未就绪</b>${esc(e.message)}`;
+  }
+})();
+
+async function startIndex() {
+  try {
+    const d = await api('/index', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ skip_indexed: true }) });
+    toast('已启动索引：' + d.root);
+    poll();
+  } catch (e) { toast(e.message, true); }
+}
+function poll() {
+  const t = setInterval(async () => {
+    try {
+      const p = await api('/progress');
+      if (p.running) {
+        $('pbar').style.width = (p.done / Math.max(p.total,1) * 100).toFixed(1) + '%';
+        $('hint').innerHTML = `索引中 <b>${p.done}/${p.total}</b> · ${p.ms_per_img}ms/张 · 剩余约 ${Math.round((p.eta||0)/60)} 分`;
+      } else {
+        $('pbar').style.width = '0'; clearInterval(t);
+        loadStats(); render();
+      }
+    } catch { clearInterval(t); }
+  }, 900);
+}
+window.startIndex = startIndex;
+window.batchFlag = batchFlag;
+window.batchLLM = batchLLM;
+window.clearSel = clearSel;
+</script>
+</body>
+</html>

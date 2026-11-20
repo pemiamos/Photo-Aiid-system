@@ -43,6 +43,18 @@ export default function Header() {
       </nav>
 
       <div className="header-right">
+        {/* 本地视觉预分类：独立页面（后端托管，见 backend/fast_review.html）。
+            用 <a> 而不是 tab，因为它是另一套渲染，不共享 React 状态。 */}
+        <a
+          className="mode-toggle"
+          href="/fast"
+          target="_blank"
+          rel="noreferrer"
+          title="本地 CLIP + 人脸检测的预分类：批量粗分类、低置信打标、重复图归组、以图搜图"
+          style={{ textDecoration: 'none' }}
+        >
+          AI 预分类
+        </a>
         <button
           className="mode-toggle"
           onClick={() => dispatch({ type: Actions.SET_PRO_MODE, payload: !proMode })}

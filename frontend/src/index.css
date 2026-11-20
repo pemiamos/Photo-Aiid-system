@@ -1,30 +1,65 @@
 /* ============================================================
    Photo-Aiid-system · Design System
+
+   色板与字体同源于 backend/fast_review.html（预分类页）。
+   两处要一起改，改这里不会自动同步那边。
    ============================================================ */
 
 :root {
-  /* ── palette ── */
-  --bg: #16181c;
-  --panel: #1d2026;
-  --panel-2: #22262d;
-  --line: #2d323a;
-  --text: #e8e6df;
-  --muted: #8d929c;
-  --faint: #5b606a;
-  --amber: #e8a33d;
-  --amber-dim: #a06f24;
-  --ok: #7fb069;
-  --warn: #d96c5f;
+  /* ── 色板 ────────────────────────────────────────────── */
+  --bg: #0d0f13;          /* 画布 */
+  --bg-2: #0a0c10;        /* 更深：侧栏、输入框 */
+  --panel: #161a21;       /* 面板 */
+  --panel-2: #1c2029;     /* 面板（悬浮/次级）*/
+  --line: #242932;        /* 分隔线 */
+  --line-2: #323846;      /* 强分隔线 */
 
-  /* ── typography ── */
+  --text: #e9ecf2;        /* 主文字 */
+  --muted: #8b93a2;       /* 次级文字 */
+  --faint: #59616f;       /* 弱化文字 */
+
+  --amber: #e8a83d;       /* 品牌强调色 */
+  --amber-dim: #b57d22;
+  --ok: #4fa87d;          /* 成功 */
+  --warn: #d9614f;        /* 危险 / 低置信 */
+  --blue: #5b8fd6;        /* 信息 / 已提交 */
+  --purple: #9a7bd4;      /* 重复标记 */
+  --cyan: #4aa8a0;        /* 辅助 */
+
+  /* 别名：与 fast_review.html 的命名对齐，便于两边对照 */
+  --txt: var(--text);
+  --dim: var(--muted);
+  --green: var(--ok);
+  --red: var(--warn);
+
+  /* ── 圆角 ────────────────────────────────────────────── */
+  --r1: 6px;              /* 按钮、输入框、小标签 */
+  --r2: 10px;             /* 卡片、面板 */
+  --r3: 14px;             /* 大容器、浮动条 */
+
+  /* ── 间距 ────────────────────────────────────────────── */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+
+  /* ── 阴影 ────────────────────────────────────────────── */
+  --shadow: 0 4px 20px rgba(0, 0, 0, .45);
+  --shadow-lg: 0 10px 40px rgba(0, 0, 0, .6);
+
+  /* ── 字体 ────────────────────────────────────────────── */
+  /* 本机规范：中文无衬线优先 OPPOSans / MiSans，不用系统雅黑 */
+  --sans: 'OPPO Sans 4.0', 'MiSans', 'Noto Sans SC', 'Noto Sans CJK SC',
+          -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
-  --sans: -apple-system, 'PingFang SC', 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif;
 
-  /* ── spacing ── */
+  /* ── 布局 ────────────────────────────────────────────── */
   --header-h: 52px;
   --sidebar-w: 280px;
 
-  /* ── transitions ── */
+  /* ── 动效 ────────────────────────────────────────────── */
   --ease: cubic-bezier(.4, 0, .2, 1);
 }
 
@@ -44,26 +79,29 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: 13.5px;
+  line-height: 1.55;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── scrollbar ── */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 3px;
+  background: var(--line-2);
+  border-radius: 5px;
+  border: 2px solid var(--bg);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--faint);
+  background: #3a4250;
 }
 
 /* ── shared UI atoms ── */
@@ -71,9 +109,9 @@ input[type="text"],
 input[type="password"],
 select {
   width: 100%;
-  background: var(--bg);
+  background: var(--bg-2);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--r1);
   color: var(--text);
   padding: 7px 9px;
   font-family: var(--mono);
@@ -85,13 +123,13 @@ input[type="text"]:focus,
 input[type="password"]:focus,
 select:focus {
   outline: none;
-  border-color: var(--amber-dim);
+  border-color: var(--amber);
 }
 
 select {
   cursor: pointer;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%235b606a'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%2359616f'%3E%3Cpath d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 8px center;
   padding-right: 28px;
@@ -101,7 +139,7 @@ select {
 .btn {
   width: 100%;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--r1);
   padding: 9px;
   font-size: 13px;
   cursor: pointer;
@@ -111,7 +149,7 @@ select {
 
 .btn.primary {
   background: var(--amber);
-  color: #1a1408;
+  color: #1a1206;
   font-weight: 600;
 }
 .btn.primary:hover {
@@ -124,7 +162,8 @@ select {
   border: 1px solid var(--line);
 }
 .btn.ghost:hover {
-  border-color: var(--faint);
+  border-color: var(--line-2);
+  background: #232833;
 }
 
 .btn.danger {
@@ -133,17 +172,17 @@ select {
   color: var(--warn);
 }
 .btn.danger:hover {
-  background: rgba(217, 108, 95, .08);
+  background: rgba(217, 97, 79, .12);
 }
 
 .btn:disabled {
-  opacity: .4;
+  opacity: .35;
   cursor: not-allowed;
   pointer-events: none;
 }
 
 .btn + .btn {
-  margin-top: 8px;
+  margin-top: var(--s2);
 }
 
 /* ── pulse animation ── */
@@ -180,19 +219,20 @@ select {
 /* ── error toast ── */
 .error-toast {
   position: fixed;
-  bottom: 24px;
+  bottom: var(--s5);
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(217, 108, 95, .95);
-  color: #fff;
-  padding: 10px 24px;
-  border-radius: 8px;
+  background: rgba(28, 32, 41, .97);
+  border: 1px solid rgba(217, 97, 79, .5);
+  color: var(--warn);
+  padding: 10px 22px;
+  border-radius: var(--r2);
   font-size: 13px;
   cursor: pointer;
   z-index: 100;
   animation: fadeIn .2s var(--ease);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
   max-width: 600px;
   text-align: center;
 }
-
